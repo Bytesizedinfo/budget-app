@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Running UI checks…</title>
+<style>
+  body { font: 14px/1.5 system-ui, sans-serif; margin: 24px; color: #0b0b0b; background: #fcfcfb; }
+  #summary { font-size: 18px; font-weight: 600; }
+  .pass { color: #006300; }
+  .fail { color: #b42f2f; }
+  pre { margin: 2px 0 8px; white-space: pre-wrap; }
+  iframe { width: 1100px; height: 900px; border: 1px solid #ccc; margin-top: 16px; }
+</style>
+<script type="module" src="ui.js"></script>
+</head>
+<body>
+<h1>Budget UI checks (demo mode, in an iframe)</h1>
+<p id="summary">Running…</p>
+<ol id="results"></ol>
+<iframe id="app" title="App under test"></iframe>
+</body>
+</html>
