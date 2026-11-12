@@ -341,6 +341,41 @@ test('import: running it again adds nothing and keeps later edits and deletions'
   assert.equal(goalProgress(again.goals.find((g) => g.name === 'Holiday'), '2026-11-12').saved, 14000);
 });
 
+test('import: monthly bills become recurring items from their next due date', () => {
+  const backup = spendSaveBackup();
+  backup.settings.subs = [
+    { id: 's1', name: 'Phone plan', amount: 28, cycle: 'monthly', day: 15, next: '2026-11-15', label: 'shopping', active: true, from: 'spend' },
+    { id: 's2', name: 'Domain', amount: 20, cycle: 'yearly', next: '2027-03-01', label: 'shopping', active: true },
+    { id: 's3', name: 'Old gym', amount: 50, cycle: 'monthly', next: '2026-12-02', label: 'unknown', active: false },
+  ];
+  const store = createStore(seedState('SGD'));
+  const first = importSpendSave(backup, store.get());
+  store.replace(first.state, 'local');
+  const phone = store.get().recurring.find((r) => r.id === 'ss-sub-s1');
+  assert.deepEqual([phone.name, phone.kind, phone.amount, phone.startDate, phone.categoryId, phone.paused], ['Phone plan', 'expense', 2800, '2026-11-15', 'c_shopping', false]);
+  const gym = store.get().recurring.find((r) => r.id === 'ss-sub-s3');
+  assert.ok(gym.paused, 'inactive bills come in paused');
+  assert.equal(gym.categoryId, 'c_other');
+  assert.deepEqual(first.summary.unsupportedRecurring, ['Domain']);
+  assert.equal(importSpendSave(backup, store.get()).state.recurring.length, 2, 're-import adds no duplicates');
+});
+
+test('import: moves shift money between pots, without double-counting linked ones', () => {
+  const backup = spendSaveBackup();
+  backup.months['m-2026-09'].tx.push(
+    { id: 'm1', t: 'move', amt: 25, from: 'holiday', to: 'laptop', d: '2026-09-10', note: '' },
+    { id: 'm2', t: 'move', amt: 40, from: 'spend', to: 'holiday', d: '2026-09-11', note: '', via: 'a1' },
+    { id: 'm3', t: 'transfer', amt: 5, d: '2026-09-12' },
+  );
+  const { state, summary } = importSpendSave(backup, seedState('SGD'));
+  const saved = (name) => goalProgress(state.goals.find((g) => g.name === name), '2026-11-12').saved;
+  assert.equal(saved('Holiday'), 14000 - 2500);
+  assert.equal(saved('New laptop'), 10000 + 2500);
+  assert.equal(state.transactions.length, 6, 'moves are not income or spending');
+  assert.equal(summary.moves, 2);
+  assert.equal(summary.skipped, 2, 'the zero amount and the unknown entry type');
+});
+
 test('import: an existing goal with the same name is reused, not duplicated', () => {
   const state = seedState('SGD');
   state.goals = [{ id: 'mine', name: 'holiday', target: 300000, deadline: null, updatedAt: 99, contributions: [{ id: 'x', date: '2026-07-01', amount: 2000, updatedAt: 99 }] }];

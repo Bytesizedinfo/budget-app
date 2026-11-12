@@ -112,6 +112,8 @@ async function importFromSpendSave(ctx, raw) {
       ? `${added} new ${added === 1 ? 'transaction' : 'transactions'} (out of ${summary.income + summary.expenses} in the file).`
       : `All ${summary.income + summary.expenses} transactions in this file are already here.`,
     summary.goals.length ? `Savings: ${summary.goals.join(', ')}.` : '',
+    summary.recurring.length ? `New monthly recurring items: ${summary.recurring.join(', ')}.` : '',
+    summary.unsupportedRecurring.length ? `Not repeating monthly, so not added: ${summary.unsupportedRecurring.join(', ')}.` : '',
     summary.newCategories.length ? `New categories: ${summary.newCategories.join(', ')}.` : '',
     summary.archived.length ? `Unused starter categories will be archived: ${summary.archived.join(', ')}.` : '',
     'Nothing already here is removed, and importing the same file again won’t create duplicates.',
@@ -120,7 +122,7 @@ async function importFromSpendSave(ctx, raw) {
   if (ok) {
     // Merge again in case a sync changed things while the dialog was open.
     ctx.store.replace(importSpendSave(raw, ctx.store.get()).state, 'local');
-    ctx.toast(added ? `Imported ${added} ${added === 1 ? 'transaction' : 'transactions'}` : 'Already up to date');
+    ctx.toast(added || summary.recurring.length ? 'Import complete' : 'Already up to date');
   }
 }
 

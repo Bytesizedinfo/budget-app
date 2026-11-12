@@ -30,7 +30,7 @@ export function importSpendSave(raw, state) {
   const labels = settings.labels ?? [];
   const incomeCats = settings.incomeCats ?? [];
   const pots = settings.saveCats ?? [];
-  const summary = { income: 0, expenses: 0, skipped: 0, newCategories: [], renamed: [], archived: [], goals: [], emptyPots: [], currency: null };
+  const summary = { income: 0, expenses: 0, moves: 0, skipped: 0, newCategories: [], renamed: [], archived: [], goals: [], emptyPots: [], recurring: [], unsupportedRecurring: [], currency: null };
 
   // ---- Categories ----
   const categories = new Map(); // id -> record to add or update
@@ -91,8 +91,18 @@ export function importSpendSave(raw, state) {
   for (const key of months) {
     for (const t of raw.months[key]?.tx ?? []) {
       const amount = cents(t.amt);
-      if (!t.id || !isValidDate(t.d) || !(amount > 0)) {
+      if (!t.id || !isValidDate(t.d) || !(amount > 0) || !['in', 'out', 'move'].includes(t.t)) {
         summary.skipped += 1;
+        continue;
+      }
+      // A move shifts money between Spending and savings pots; it isn't income or spending.
+      // Moves tied to an income entry (`via`) are already reflected in that entry's split.
+      if (t.t === 'move') {
+        summary.moves += 1;
+        if (!t.via) {
+          addMove(t.from, `ss-${t.id}-from`, t.d, -amount);
+          addMove(t.to, `ss-${t.id}-to`, t.d, amount);
+        }
         continue;
       }
       const kind = t.t === 'in' ? 'income' : 'expense';
@@ -132,8 +142,24 @@ export function importSpendSave(raw, state) {
     summary.goals.push(pot.name);
   }
 
+  // ---- Bills and subscriptions become recurring items ----
+  // They start from the next unpaid due date, since earlier payments are already transactions.
+  // This app repeats monthly, so other cycles are reported back rather than guessed at.
+  const recurring = [];
+  for (const sub of settings.subs ?? []) {
+    const id = `ss-sub-${sub.id}`;
+    if (!sub.id || state.recurring.some((r) => r.id === id) || id in state.deleted) continue;
+    if ((sub.cycle ?? 'monthly') !== 'monthly' || !isValidDate(sub.next) || !(cents(sub.amount) > 0)) {
+      summary.unsupportedRecurring.push(sub.name);
+      continue;
+    }
+    const categoryId = map.expense[sub.label] ?? fallback('expense');
+    recurring.push({ id, name: String(sub.name ?? '').trim() || 'Subscription', kind: 'expense', amount: cents(sub.amount), categoryId, startDate: sub.next, endDate: null, paused: sub.active === false, resumeDate: null, updatedAt: at });
+    summary.recurring.push(sub.name);
+  }
+
   // ---- Tidy up: hide untouched starter categories that nothing uses ----
-  const used = new Set([...state.transactions, ...transactions, ...state.recurring].map((r) => r.categoryId));
+  const used = new Set([...state.transactions, ...transactions, ...state.recurring, ...recurring].map((r) => r.categoryId));
   for (const id of [...Object.values(map.expense), ...Object.values(map.income)]) used.add(id);
   for (const c of state.categories) {
     if (c.updatedAt <= 1 && !c.archived && !used.has(c.id) && !categories.has(c.id)) {
@@ -149,6 +175,6 @@ export function importSpendSave(raw, state) {
     summary.currency = currency;
   }
 
-  const incoming = { schema: SCHEMA, settings: nextSettings, categories: [...categories.values()], transactions, recurring: [], goals, deleted: {} };
+  const incoming = { schema: SCHEMA, settings: nextSettings, categories: [...categories.values()], transactions, recurring, goals, deleted: {} };
   return { state: mergeStates(state, incoming), summary };
 }
