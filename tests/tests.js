@@ -1,5 +1,6 @@
 import { budgetSummary, goalProgress, totals, trend } from '../js/calc.js';
 import { addMonths, dateInMonth, daysInMonth, isValidDate, monthRange } from '../js/dates.js';
+import { importSpendSave } from '../js/import-spendsave.js';
 import { mergeStates } from '../js/merge.js';
 import { centsToInput, formatMoney, parseAmount } from '../js/money.js';
 import { dueOccurrences, nextDate, occurrenceId } from '../js/recurring.js';
@@ -61,6 +62,12 @@ test('formatMoney uses each currency’s decimals and a true minus sign', () => 
   assert.ok(formatMoney(-500, 'USD').startsWith('−'));
   assert.ok(formatMoney(500, 'USD', { sign: true }).startsWith('+'));
   assert.ok(!formatMoney(0, 'USD', { sign: true }).startsWith('+'));
+});
+
+test('dollar currencies other than USD show which dollar', () => {
+  assert.ok(formatMoney(3600, 'SGD').includes('S$36.00'), formatMoney(3600, 'SGD'));
+  assert.ok(formatMoney(-150000, 'AUD').includes('A$1,500.00'), formatMoney(-150000, 'AUD'));
+  assert.ok(!formatMoney(100, 'USD').includes('US'), formatMoney(100, 'USD'));
 });
 
 test('centsToInput round-trips through parseAmount', () => {
@@ -236,6 +243,110 @@ test('merge: goal contributions from both devices are combined', () => {
   const merged = mergeStates(a, b).goals[0];
   assert.equal(merged.name, 'Japan trip');
   assert.deepEqual(merged.contributions.map((c) => c.id).sort(), ['c1', 'c2']);
+});
+
+test('goals without a target are open-ended pots', () => {
+  const p = goalProgress({ target: null, contributions: [{ id: 'a', amount: 5000 }, { id: 'b', amount: -1000 }] }, '2026-11-12');
+  assert.ok(p.open);
+  assert.equal(p.saved, 4000);
+  assert.ok(!p.done);
+});
+
+test('parseState rejects JSON that is not a budget', () => {
+  let threw = false;
+  try {
+    parseState('{"app":"something-else"}');
+  } catch {
+    threw = true;
+  }
+  assert.ok(threw);
+});
+
+// ---------- Spend & Save import (synthetic sample data) ----------
+
+const spendSaveBackup = () => ({
+  app: 'spend-save',
+  v: 1,
+  exported: '2026-10-01T00:00:00.000Z',
+  settings: {
+    symbol: 'RM',
+    labels: [{ id: 'food', name: 'Food & drinks' }, { id: 'shopping', name: 'Shopping' }, { id: 'pets', name: 'Pet supplies' }],
+    incomeCats: [{ id: 'salary', name: 'Salary' }, { id: 'tutoring', name: 'Tutoring' }],
+    saveCats: [
+      { id: 'holiday', name: 'Holiday', start: 50, target: 0 },
+      { id: 'laptop', name: 'New laptop', start: 0, target: 1200, date: '2027-06-30', goal: true },
+      { id: 'rainy', name: 'Rainy day', start: 0, target: 0 },
+    ],
+  },
+  months: {
+    'm-2026-08': { tx: [{ id: 'a1', t: 'in', amt: 1000, cat: 'salary', d: '2026-08-28', note: '', save: { holiday: 150, laptop: 100 }, spend: 750 }] },
+    'm-2026-09': {
+      tx: [
+        { id: 'b1', t: 'out', amt: 12.5, label: 'food', d: '2026-09-02', note: 'Lunch', from: 'spend' },
+        { id: 'b2', t: 'out', amt: 4.2, label: '', d: '2026-09-03', note: 'food', from: 'spend' },
+        { id: 'b3', t: 'out', amt: 30, label: 'pets', d: '2026-09-04', note: 'Cat food', from: 'spend' },
+        { id: 'b4', t: 'in', amt: 80, d: '2026-09-05', note: '', save: {}, spend: 80 },
+        { id: 'b5', t: 'out', amt: 60, label: 'other', d: '2026-09-06', note: 'Flight deposit', from: 'holiday' },
+        { id: 'b6', t: 'out', amt: 0, label: 'food', d: '2026-09-07', note: 'zero' },
+      ],
+    },
+  },
+});
+
+test('import: transactions, categories and currency come across', () => {
+  const { state, summary } = importSpendSave(spendSaveBackup(), seedState('SGD'));
+  const byId = Object.fromEntries(state.transactions.map((t) => [t.id, t]));
+  assert.equal(state.transactions.length, 6);
+  assert.equal(summary.skipped, 1);
+  assert.equal(state.settings.currency, 'MYR');
+  assert.equal(byId['ss-b1'].amount, 1250);
+  assert.equal(byId['ss-b1'].categoryId, 'c_food');
+  assert.equal(state.categories.find((c) => c.id === 'c_food').name, 'Food & drinks');
+  assert.equal(byId['ss-b2'].categoryId, 'c_food', 'uncategorised expense noted "food"');
+  assert.equal(byId['ss-b3'].categoryId, 'ss-expense-pets');
+  assert.equal(byId['ss-b4'].categoryId, 'c_other_income', 'income without a category');
+  assert.equal(byId['ss-b5'].categoryId, 'c_other');
+  assert.equal(byId['ss-a1'].kind, 'income');
+});
+
+test('import: savings pots become goals with their history', () => {
+  const { state, summary } = importSpendSave(spendSaveBackup(), seedState('SGD'));
+  const holiday = state.goals.find((g) => g.name === 'Holiday');
+  const laptop = state.goals.find((g) => g.name === 'New laptop');
+  assert.equal(holiday.target, null);
+  assert.equal(goalProgress(holiday, '2026-11-12').saved, 5000 + 15000 - 6000);
+  assert.equal(laptop.target, 120000);
+  assert.equal(laptop.deadline, '2027-06-30');
+  assert.equal(goalProgress(laptop, '2026-11-12').saved, 10000);
+  assert.deepEqual(summary.emptyPots, ['Rainy day']);
+});
+
+test('import: unused starter categories are archived, used and matching ones kept', () => {
+  const { state } = importSpendSave(spendSaveBackup(), seedState('SGD'));
+  const archived = state.categories.filter((c) => c.archived).map((c) => c.id).sort();
+  assert.deepEqual(archived, ['c_fun', 'c_groceries', 'c_health', 'c_housing', 'c_transport', 'c_utilities']);
+});
+
+test('import: running it again adds nothing and keeps later edits and deletions', () => {
+  const store = createStore(seedState('SGD'));
+  store.replace(importSpendSave(spendSaveBackup(), store.get()).state, 'local');
+  const lunch = store.get().transactions.find((t) => t.id === 'ss-b1');
+  store.save('transactions', { ...lunch, note: 'Lunch with Sam' });
+  store.remove('transactions', 'ss-b3');
+  const counts = [store.get().transactions.length, store.get().categories.length, store.get().goals.length];
+  const again = importSpendSave(spendSaveBackup(), store.get()).state;
+  assert.deepEqual([again.transactions.length, again.categories.length, again.goals.length], counts);
+  assert.equal(again.transactions.find((t) => t.id === 'ss-b1').note, 'Lunch with Sam');
+  assert.ok(!again.transactions.some((t) => t.id === 'ss-b3'));
+  assert.equal(goalProgress(again.goals.find((g) => g.name === 'Holiday'), '2026-11-12').saved, 14000);
+});
+
+test('import: an existing goal with the same name is reused, not duplicated', () => {
+  const state = seedState('SGD');
+  state.goals = [{ id: 'mine', name: 'holiday', target: 300000, deadline: null, updatedAt: 99, contributions: [{ id: 'x', date: '2026-07-01', amount: 2000, updatedAt: 99 }] }];
+  const goal = importSpendSave(spendSaveBackup(), state).state.goals.find((g) => g.id === 'mine');
+  assert.equal(goal.target, 300000, 'keeps its own target');
+  assert.equal(goalProgress(goal, '2026-11-12').saved, 2000 + 14000);
 });
 
 // ---------- sync (against a fake GitHub) ----------

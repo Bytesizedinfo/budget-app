@@ -2,7 +2,7 @@
 // back to the last cached copy of the app when offline. GitHub API calls are never cached.
 // Bump CACHE when files are added or renamed.
 
-const CACHE = 'budget-v1';
+const CACHE = 'budget-v2';
 const APP_FILES = [
   './',
   'index.html',
@@ -17,6 +17,7 @@ const APP_FILES = [
   'js/dates.js',
   'js/demo.js',
   'js/dom.js',
+  'js/import-spendsave.js',
   'js/merge.js',
   'js/money.js',
   'js/recurring.js',

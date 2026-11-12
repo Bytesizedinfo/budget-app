@@ -184,6 +184,59 @@ step('changing currency reformats amounts', async () => {
   expect(!$('.hero-value').textContent.includes('.'), 'no decimals for yen');
 });
 
+step('importing a Spend & Save backup adds its transactions and savings', async () => {
+  await go('settings');
+  const now = new Date();
+  const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+  const backup = {
+    app: 'spend-save',
+    v: 1,
+    exported: `${today}T00:00:00.000Z`,
+    settings: {
+      symbol: 'S$',
+      labels: [{ id: 'food', name: 'Food & drinks' }],
+      incomeCats: [{ id: 'salary', name: 'Salary' }],
+      saveCats: [{ id: 'trip', name: 'UI check trip', start: 0, target: 0 }],
+    },
+    months: {
+      [`m-${today.slice(0, 7)}`]: {
+        tx: [
+          { id: 'u1', t: 'out', amt: 9.9, label: 'food', d: today, note: 'UI check import', from: 'spend' },
+          { id: 'u2', t: 'in', amt: 100, cat: 'salary', d: today, note: '', save: { trip: 40 }, spend: 60 },
+        ],
+      },
+    },
+  };
+  const { DataTransfer, File } = frame.contentWindow;
+  const files = new DataTransfer();
+  files.items.add(new File([JSON.stringify(backup)], 'spend-save-backup.json', { type: 'application/json' }));
+  const input = $('#data-file');
+  input.files = files.files;
+  input.dispatchEvent(new Event('change'));
+  const dialog = await openDialog();
+  expect(dialog.textContent.includes('2 new transactions'), dialog.textContent);
+  submit(dialog);
+  await dialogClosed();
+  await go('transactions');
+  await until(() => text('.tx-title').includes('UI check import'), 'the imported transaction');
+  await go('goals');
+  await until(() => $$('.goal-card').some((c) => c.textContent.includes('UI check trip') && c.textContent.includes('S$40.00 saved')), 'the imported savings pot');
+});
+
+step('the header toggle switches between light and dark', async () => {
+  const toggle = $('.theme-toggle');
+  const root = frame.contentDocument.documentElement;
+  const background = () => frame.contentWindow.getComputedStyle(frame.contentDocument.body).backgroundColor;
+  const startedDark = toggle.getAttribute('aria-label').includes('light');
+  toggle.click();
+  await until(() => root.dataset.theme === (startedDark ? 'light' : 'dark'), 'the theme to switch');
+  expect(background() === (startedDark ? 'rgb(246, 246, 243)' : 'rgb(13, 13, 13)'), `page colour is ${background()}`);
+  expect(toggle.getAttribute('aria-label').includes(startedDark ? 'dark' : 'light'), 'label flips');
+  toggle.click();
+  await until(() => root.dataset.theme === (startedDark ? 'dark' : 'light'), 'the theme to switch back');
+  frame.contentWindow.localStorage.removeItem('budget:theme');
+});
+
 step('no uncaught errors in the demo', () => {
   expect(!errors.length, errors.join('\n'));
 });

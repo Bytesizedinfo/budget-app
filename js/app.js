@@ -6,7 +6,7 @@ import { dueOccurrences } from './recurring.js';
 import { createStore } from './store.js';
 import { createSync } from './sync.js';
 import { syncPill } from './syncui.js';
-import { applyTheme, readTheme } from './theme.js';
+import { applyTheme, isDark, onThemeChange, readTheme, saveTheme } from './theme.js';
 import { transactionDialog } from './tx.js';
 import { renderBudgets } from './views/budgets.js';
 import { renderDashboard } from './views/dashboard.js';
@@ -107,6 +107,7 @@ function buildShell() {
         h('header', { class: 'topbar' },
           brand(),
           h('span', { class: 'spacer' }),
+          themeToggle(),
           syncPill(ctx),
           h('button', { type: 'button', class: 'btn btn-primary btn-add', onclick: add }, icon('plus'), 'Add transaction')),
         main)),
@@ -115,6 +116,26 @@ function buildShell() {
   if (demo) {
     app.prepend(h('div', { class: 'demo-banner' }, 'You’re trying the demo with sample data. Nothing you change is saved. ', h('a', { href: './' }, 'Use my own budget')));
   }
+}
+
+function themeToggle() {
+  const button = h('button', {
+    type: 'button',
+    class: 'icon-btn theme-toggle',
+    onclick: () => {
+      saveTheme(isDark() ? 'light' : 'dark');
+      render(); // Settings shows the current choice.
+    },
+  });
+  const update = () => {
+    const label = isDark() ? 'Switch to light mode' : 'Switch to dark mode';
+    button.replaceChildren(icon(isDark() ? 'sun' : 'moon'));
+    button.setAttribute('aria-label', label);
+    button.title = label;
+  };
+  onThemeChange(update);
+  update();
+  return button;
 }
 
 function brand() {

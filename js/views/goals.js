@@ -13,26 +13,27 @@ export function renderGoals(ctx) {
     viewHead(ctx, 'Savings goals', { actions: [newGoal] }),
     state.goals.length
       ? h('div', { class: 'goal-grid' }, state.goals.map((goal) => goalCard(ctx, goal, today)))
-      : card({}, empty('Saving up for something? Set a target, add money as you put it aside, and watch it grow.',
+      : card({}, empty('Saving up for something? Add a goal (with or without a target), put money in as you set it aside, and watch it grow.',
         h('button', { type: 'button', class: 'btn btn-primary', onclick: () => goalDialog(ctx) }, icon('plus'), 'New goal'))));
 }
 
 function goalCard(ctx, goal, today) {
   const p = goalProgress(goal, today);
   let note;
-  if (p.done) note = h('p', { class: 'goal-note good' }, icon('check', 'icon-sm'), 'Goal reached');
+  if (p.open) note = h('p', { class: 'goal-note' }, 'No target. Just tracking what you’ve put aside.');
+  else if (p.done) note = h('p', { class: 'goal-note good' }, icon('check', 'icon-sm'), 'Goal reached');
   else if (p.overdue) note = h('p', { class: 'goal-note' }, `The target date has passed · ${ctx.money(p.remaining)} to go`);
   else if (p.perMonth) note = h('p', { class: 'goal-note' }, `Put aside about ${ctx.money(p.perMonth)} a month to get there on time`);
   else note = h('p', { class: 'goal-note' }, `${ctx.money(p.remaining)} to go`);
 
   return card({
     title: goal.name,
-    sub: goal.deadline ? `Target date ${formatDate(goal.deadline)}` : 'No target date',
+    sub: goal.deadline ? `Target date ${formatDate(goal.deadline)}` : p.open ? 'Savings pot' : 'No target date',
     action: h('button', { type: 'button', class: 'icon-btn', 'aria-label': `Edit ${goal.name}`, onclick: () => goalDialog(ctx, goal) }, icon('edit')),
     cls: 'goal-card',
   },
-    h('p', { class: 'goal-amount' }, h('span', { class: 'goal-saved' }, ctx.money(p.saved)), ` of ${ctx.money(goal.target)}`),
-    meter(p.ratio),
+    h('p', { class: 'goal-amount' }, h('span', { class: 'goal-saved' }, ctx.money(p.saved)), p.open ? ' saved' : ` of ${ctx.money(goal.target)}`),
+    p.open ? null : meter(p.ratio),
     note,
     h('div', { class: 'btn-row' },
       h('button', { type: 'button', class: 'btn btn-primary btn-sm', onclick: () => contributionDialog(ctx, goal, 1) }, icon('plus'), 'Add money'),
@@ -66,7 +67,7 @@ function goalDialog(ctx, goal = null) {
   const content = h('div', { class: 'form-grid' },
     field('Name', h('input', { name: 'name', class: 'input', maxLength: 60, autocomplete: 'off', autofocus: !goal, value: goal?.name ?? '', placeholder: 'e.g. Emergency fund' })),
     h('div', { class: 'form-row' },
-      field('Target amount', h('input', { name: 'target', class: 'input', inputmode: 'decimal', autocomplete: 'off', value: goal ? centsToInput(goal.target, currency) : '' })),
+      field('Target amount', h('input', { name: 'target', class: 'input', inputmode: 'decimal', autocomplete: 'off', placeholder: 'No target', value: goal?.target > 0 ? centsToInput(goal.target, currency) : '' }), 'Optional'),
       field('Target date', h('input', { name: 'deadline', type: 'date', class: 'input', value: goal?.deadline ?? '' }), 'Optional')),
     goal ? null : field('Already saved', h('input', { name: 'saved', class: 'input', inputmode: 'decimal', autocomplete: 'off', placeholder: 'Optional' })),
     history.length
@@ -93,8 +94,9 @@ function goalDialog(ctx, goal = null) {
     onSubmit(data) {
       const name = String(data.get('name')).trim();
       if (!name) throw new Error('Give the goal a name.');
-      const target = parseAmount(data.get('target'));
-      if (!target) throw new Error('Enter a target amount greater than zero.');
+      const targetText = String(data.get('target') ?? '').trim();
+      const target = targetText ? parseAmount(targetText) : null;
+      if (targetText && !target) throw new Error('Enter a target amount greater than zero, or leave it empty.');
       const deadline = data.get('deadline') || null;
       if (deadline && !isValidDate(deadline)) throw new Error('Choose a valid target date, or leave it empty.');
       const savedText = String(data.get('saved') ?? '').trim();

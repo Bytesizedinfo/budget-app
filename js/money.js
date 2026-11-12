@@ -55,24 +55,34 @@ function formatter(currency, options = {}) {
   return formatters.get(key);
 }
 
+// The short symbol for most dollar currencies is a bare "$"; show which dollar it is instead.
+const DOLLAR_SYMBOLS = { SGD: 'S$', AUD: 'A$', NZD: 'NZ$', CAD: 'C$', HKD: 'HK$', TWD: 'NT$', MXN: 'MX$' };
+
+function format(value, currency, options) {
+  const symbol = DOLLAR_SYMBOLS[currency];
+  const f = formatter(currency, options);
+  if (!symbol) return f.format(value);
+  return f.formatToParts(value).map((part) => (part.type === 'currency' ? symbol : part.value)).join('');
+}
+
 export function fractionDigits(currency) {
   return formatter(currency).resolvedOptions().maximumFractionDigits;
 }
 
 export function formatMoney(cents, currency, { sign = false } = {}) {
-  const text = formatter(currency).format(Math.abs(cents) / 100);
+  const text = format(Math.abs(cents) / 100, currency);
   if (cents < 0) return `−${text}`;
   return sign && cents > 0 ? `+${text}` : text;
 }
 
 export function formatCompact(cents, currency) {
-  return formatter(currency, { notation: 'compact', minimumFractionDigits: 0, maximumFractionDigits: 1 }).format(cents / 100);
+  return format(cents / 100, currency, { notation: 'compact', minimumFractionDigits: 0, maximumFractionDigits: 1 });
 }
 
 // Short, glanceable amounts: "£971" or "£5.1K".
 export function formatApprox(cents, currency) {
   if (Math.abs(cents) >= 100000) return formatCompact(cents, currency);
-  return formatter(currency, { minimumFractionDigits: 0, maximumFractionDigits: 0 }).format(cents / 100);
+  return format(cents / 100, currency, { minimumFractionDigits: 0, maximumFractionDigits: 0 });
 }
 
 // The plain number shown in an input field, e.g. 1250 -> "12.50" (or "13" for yen).

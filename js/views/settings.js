@@ -1,6 +1,7 @@
 import { transactionsCsv } from '../csv.js';
 import { todayISO } from '../dates.js';
 import { download, h, icon } from '../dom.js';
+import { importSpendSave, isSpendSaveBackup } from '../import-spendsave.js';
 import { CURRENCIES } from '../money.js';
 import { parseState, serialize } from '../store.js';
 import { tokenDialog } from '../syncui.js';
@@ -71,38 +72,76 @@ async function lockDevice(ctx) {
   }
 }
 
+// Accepts this app's own backups (which replace everything) and Spend & Save backups (merged in).
+async function openDataFile(ctx, file) {
+  let raw;
+  try {
+    raw = JSON.parse(await file.text());
+  } catch {
+    ctx.toast("That file isn't a backup this app can read.");
+    return;
+  }
+  if (isSpendSaveBackup(raw)) {
+    importFromSpendSave(ctx, raw);
+    return;
+  }
+  let next;
+  try {
+    next = parseState(JSON.stringify(raw));
+  } catch (err) {
+    ctx.toast(err.message);
+    return;
+  }
+  const ok = await confirmDialog({
+    title: 'Restore this backup?',
+    message: `This replaces your whole budget with the backup (${next.transactions.length} transactions, ${next.goals.length} goals). The current version stays in your GitHub history.`,
+    confirm: 'Replace my data',
+  });
+  if (ok) {
+    ctx.store.replace(next, 'local');
+    ctx.toast('Backup restored');
+  }
+}
+
+async function importFromSpendSave(ctx, raw) {
+  const { state, summary } = importSpendSave(raw, ctx.store.get());
+  const before = ctx.store.get();
+  const added = state.transactions.length - before.transactions.length;
+  const lines = [
+    added
+      ? `${added} new ${added === 1 ? 'transaction' : 'transactions'} (out of ${summary.income + summary.expenses} in the file).`
+      : `All ${summary.income + summary.expenses} transactions in this file are already here.`,
+    summary.goals.length ? `Savings: ${summary.goals.join(', ')}.` : '',
+    summary.newCategories.length ? `New categories: ${summary.newCategories.join(', ')}.` : '',
+    summary.archived.length ? `Unused starter categories will be archived: ${summary.archived.join(', ')}.` : '',
+    'Nothing already here is removed, and importing the same file again won’t create duplicates.',
+  ];
+  const ok = await confirmDialog({ title: 'Import from Spend & Save?', message: lines.filter(Boolean).join(' '), confirm: 'Import', danger: false });
+  if (ok) {
+    // Merge again in case a sync changed things while the dialog was open.
+    ctx.store.replace(importSpendSave(raw, ctx.store.get()).state, 'local');
+    ctx.toast(added ? `Imported ${added} ${added === 1 ? 'transaction' : 'transactions'}` : 'Already up to date');
+  }
+}
+
 function dataCard(ctx, state) {
-  const restoreInput = h('input', {
+  const fileInput = h('input', {
+    id: 'data-file',
     type: 'file',
     accept: '.json,application/json',
     hidden: true,
-    onchange: async (event) => {
+    onchange: (event) => {
       const file = event.target.files[0];
       event.target.value = '';
-      if (!file) return;
-      let next;
-      try {
-        next = parseState(await file.text());
-      } catch (err) {
-        ctx.toast(err.message);
-        return;
-      }
-      const ok = await confirmDialog({
-        title: 'Restore this backup?',
-        message: `This replaces your whole budget with the backup (${next.transactions.length} transactions, ${next.goals.length} goals). The current version stays in your GitHub history.`,
-        confirm: 'Replace my data',
-      });
-      if (ok) {
-        ctx.store.replace(next, 'local');
-        ctx.toast('Backup restored');
-      }
+      if (file) openDataFile(ctx, file);
     },
   });
   return card({ title: 'Your data' },
-    h('p', { class: 'card-text' }, 'Download a copy of everything, or export transactions to open in a spreadsheet.'),
+    h('p', { class: 'card-text' }, 'Download a copy of everything, export transactions for a spreadsheet, or bring in a backup from Spend & Save.'),
     h('div', { class: 'btn-row' },
       h('button', { type: 'button', class: 'btn', onclick: () => download(`budget-backup-${todayISO()}.json`, serialize(state), 'application/json') }, icon('download'), 'Download backup'),
-      h('button', { type: 'button', class: 'btn', onclick: () => restoreInput.click() }, icon('upload'), 'Restore backup'),
+      h('button', { type: 'button', class: 'btn', onclick: () => fileInput.click() }, icon('upload'), 'Restore backup'),
+      h('button', { type: 'button', class: 'btn', onclick: () => fileInput.click() }, icon('upload'), 'Import from Spend & Save'),
       h('button', { type: 'button', class: 'btn', onclick: () => download(`budget-transactions-${todayISO()}.csv`, transactionsCsv(state), 'text/csv') }, icon('download'), 'Export CSV'),
-      restoreInput));
+      fileInput));
 }

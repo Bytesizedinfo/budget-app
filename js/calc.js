@@ -78,6 +78,8 @@ export function trend(state, endMonth, count = 12) {
 
 export function goalProgress(goal, today) {
   const saved = goal.contributions.reduce((sum, c) => sum + c.amount, 0);
+  // Without a target, a goal is just a pot that tracks what's been put aside.
+  if (!(goal.target > 0)) return { saved, remaining: null, ratio: null, done: false, perMonth: null, overdue: false, open: true };
   const remaining = Math.max(0, goal.target - saved);
   const progress = { saved, remaining, ratio: goal.target > 0 ? saved / goal.target : 0, done: remaining === 0, perMonth: null, overdue: false };
   if (goal.deadline && remaining > 0) {

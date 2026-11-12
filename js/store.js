@@ -39,7 +39,7 @@ const records = (v) => (Array.isArray(v) ? v.filter((r) => isObject(r) && typeof
 
 // Unknown fields are kept untouched so nothing is lost if the file is edited by hand.
 export function normalize(raw) {
-  if (!isObject(raw)) throw new Error("This file doesn't contain budget data.");
+  if (!isObject(raw) || !Array.isArray(raw.categories) || !Array.isArray(raw.transactions)) throw new Error("This file doesn't contain budget data.");
   if (raw.schema > SCHEMA) throw new Error('This budget was saved by a newer version of the app. Reload the page to update.');
   return {
     schema: SCHEMA,

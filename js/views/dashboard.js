@@ -121,6 +121,10 @@ function goalsCard(ctx, state, today) {
     state.goals.length
       ? h('div', { class: 'budget-list' }, state.goals.map((goal) => {
         const p = goalProgress(goal, today);
+        if (p.open) {
+          return h('div', { class: 'budget-row' },
+            h('span', { class: 'budget-top' }, h('span', { class: 'budget-name' }, goal.name), h('span', { class: 'budget-left' }, `${ctx.money(p.saved)} saved`)));
+        }
         return h('div', { class: 'budget-row' },
           h('span', { class: 'budget-top' },
             h('span', { class: 'budget-name' }, goal.name),

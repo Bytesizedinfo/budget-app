@@ -5,9 +5,11 @@ A personal monthly budget that runs on GitHub Pages and keeps its data in a priv
 - Track income and expenses by category.
 - Set monthly budgets per category and see what's left to spend.
 - See charts of spending by category and income versus spending over 12 months.
-- Track savings goals.
+- Track savings goals, with or without a target amount.
 - Add recurring bills and income, which are recorded automatically each month.
 - Choose any common currency in Settings.
+- Switch between light and dark mode with the moon/sun button in the header. Each device remembers its own choice.
+- Import a backup from the Spend & Save app in **Settings → Import from Spend & Save**. It merges into what's already there, and importing the same file again adds nothing new.
 - Use it from any device. Changes sync through GitHub and work offline.
 
 ## How privacy works
