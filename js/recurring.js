@@ -7,17 +7,24 @@ export const occurrenceId = (ruleId, month) => `r_${ruleId}_${month}`;
 // After a pause, occurrences restart from the day the rule was resumed.
 const activeFrom = (rule) => (rule.resumeDate && rule.resumeDate > rule.startDate ? rule.resumeDate : rule.startDate);
 
+// The date this rule adds an entry in the given month, or null if it doesn't add one then.
+export function occurrenceIn(rule, month) {
+  if (rule.paused || !rule.startDate) return null;
+  const date = dateInMonth(month, dayOf(rule.startDate));
+  if (date < activeFrom(rule) || (rule.endDate && date > rule.endDate)) return null;
+  return date;
+}
+
 export function dueOccurrences(state, today) {
   const existing = new Set(state.transactions.map((t) => t.id));
   const due = [];
   for (const rule of state.recurring) {
     if (rule.paused || !rule.startDate) continue;
-    const from = activeFrom(rule);
     const until = rule.endDate && rule.endDate < today ? rule.endDate : today;
     for (const month of monthRange(monthOf(rule.startDate), monthOf(until))) {
-      const date = dateInMonth(month, dayOf(rule.startDate));
+      const date = occurrenceIn(rule, month);
       const id = occurrenceId(rule.id, month);
-      if (date < from || date > until || existing.has(id) || id in state.deleted) continue;
+      if (!date || date > today || existing.has(id) || id in state.deleted) continue;
       due.push({ id, date, kind: rule.kind, amount: rule.amount, categoryId: rule.categoryId, note: rule.name, recurringId: rule.id });
     }
   }

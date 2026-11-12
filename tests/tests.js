@@ -1,9 +1,9 @@
-import { budgetSummary, goalProgress, totals, trend } from '../js/calc.js';
+import { balance, budgetSummary, goalProgress, safeToSpend, totals, trend } from '../js/calc.js';
 import { addMonths, dateInMonth, daysInMonth, isValidDate, monthRange } from '../js/dates.js';
 import { importSpendSave } from '../js/import-spendsave.js';
 import { mergeStates } from '../js/merge.js';
 import { centsToInput, formatMoney, parseAmount } from '../js/money.js';
-import { dueOccurrences, nextDate, occurrenceId } from '../js/recurring.js';
+import { dueOccurrences, nextDate, occurrenceId, occurrenceIn } from '../js/recurring.js';
 import { createStore, emptyState, parseState, seedState, serialize } from '../js/store.js';
 import { createSync, decodeBase64, encodeBase64 } from '../js/sync.js';
 import { fakeGitHub } from './fake-github.js';
@@ -184,6 +184,73 @@ test('nextDate finds the next upcoming occurrence', () => {
   assert.equal(nextDate(rule({ startDate: '2027-01-15' }), '2026-11-12'), '2027-01-15');
   assert.equal(nextDate(rule({ endDate: '2026-11-01' }), '2026-11-12'), null);
   assert.equal(nextDate(rule({ paused: true }), '2026-11-12'), null);
+});
+
+test('occurrenceIn respects start, pause, resume and end dates', () => {
+  assert.equal(occurrenceIn(rule(), '2027-02'), '2027-02-28');
+  assert.equal(occurrenceIn(rule(), '2026-07'), null, 'before it starts');
+  assert.equal(occurrenceIn(rule({ paused: true }), '2026-11'), null);
+  assert.equal(occurrenceIn(rule({ endDate: '2026-10-31' }), '2026-11'), null);
+  assert.equal(occurrenceIn(rule({ resumeDate: '2026-11-15' }), '2026-10'), null);
+  assert.equal(occurrenceIn(rule({ resumeDate: '2026-11-15' }), '2026-11'), '2026-11-30');
+});
+
+// ---------- safe to spend & balance ----------
+
+const limitState = (transactions) => {
+  const state = seedState('SGD');
+  state.settings.spendingLimit = 20000;
+  state.transactions = transactions;
+  state.recurring = [
+    rule({ id: 'phone', amount: 3000, startDate: '2026-11-20', categoryId: 'c_utilities' }),
+    rule({ id: 'gym', amount: 2000, startDate: '2026-09-05' }),
+    rule({ id: 'pay', kind: 'income', amount: 80000, startDate: '2026-11-25' }),
+  ];
+  return state;
+};
+
+test('safe to spend: bills still to come are set aside, the rest spread over the days left', () => {
+  const s = safeToSpend(limitState([
+    tx('a', '2026-11-03', 5000), tx('b', '2026-11-12', 1000), tx('i', '2026-11-05', 80000, { kind: 'income' }), tx('old', '2026-10-30', 9999),
+  ]), '2026-11', '2026-11-12');
+  assert.equal(s.spent, 6000);
+  assert.equal(s.reserved, 3000, 'only the phone bill is still to come; income is never set aside');
+  assert.equal(s.left, 11000);
+  assert.equal(s.daysLeft, 19);
+  assert.equal(s.perDay, Math.floor(12000 / 19));
+  assert.equal(s.todayLeft, Math.floor(12000 / 19) - 1000);
+  assert.equal(s.weekLeft, Math.floor((12000 * 4) / 19) - 1000, 'Thursday to Sunday');
+  assert.equal(s.level, 'ok');
+});
+
+test('safe to spend: past and future months, deleted bills, and no limit', () => {
+  const state = limitState([tx('old', '2026-10-30', 9999)]);
+  const past = safeToSpend(state, '2026-10', '2026-11-12');
+  assert.ok(past.past);
+  assert.deepEqual([past.reserved, past.left, past.perDay], [0, 10001, null]);
+  const future = safeToSpend(state, '2026-12', '2026-11-12');
+  assert.ok(future.future);
+  assert.deepEqual([future.reserved, future.left], [5000, 15000]);
+  state.deleted = { [occurrenceId('phone', '2026-11')]: 1 };
+  assert.equal(safeToSpend(state, '2026-11', '2026-11-12').reserved, 0, 'a deleted bill is not set aside');
+  state.settings.spendingLimit = null;
+  assert.equal(safeToSpend(state, '2026-11', '2026-11-12'), null);
+});
+
+test('safe to spend: warns when spending runs ahead, flags going over, ignores big bills', () => {
+  assert.equal(safeToSpend(limitState([tx('a', '2026-11-03', 10000), tx('b', '2026-11-12', 1000)]), '2026-11', '2026-11-12').level, 'warn');
+  const over = safeToSpend(limitState([tx('a', '2026-11-03', 18000)]), '2026-11', '2026-11-12');
+  assert.deepEqual([over.left, over.level], [-1000, 'over']);
+  const bill = safeToSpend(limitState([tx('r_rent', '2026-11-01', 12000, { recurringId: 'rent' })]), '2026-11', '2026-11-12');
+  assert.equal(bill.level, 'ok', 'a large bill early in the month is not overspending');
+});
+
+test('balance: income minus spending, split into savings goals and spending money', () => {
+  const state = seedState('SGD');
+  state.transactions = [tx('i', '2026-09-01', 100000, { kind: 'income' }), tx('a', '2026-10-02', 25000), tx('later', '2026-12-01', 5000)];
+  state.goals = [{ id: 'g', name: 'Trip', target: null, updatedAt: 1, contributions: [{ id: 'c1', date: '2026-09-01', amount: 40000 }, { id: 'c2', date: '2026-11-20', amount: 10000 }] }];
+  assert.deepEqual(balance(state, '2026-11-12'), { total: 75000, savings: 40000, spending: 35000 });
+  assert.deepEqual(balance(state, '2026-09-30'), { total: 100000, savings: 40000, spending: 60000 });
 });
 
 // ---------- store & merge ----------
@@ -374,6 +441,17 @@ test('import: moves shift money between pots, without double-counting linked one
   assert.equal(state.transactions.length, 6, 'moves are not income or spending');
   assert.equal(summary.moves, 2);
   assert.equal(summary.skipped, 2, 'the zero amount and the unknown entry type');
+});
+
+test('import: the overall budget becomes the monthly spending limit unless one is set', () => {
+  const backup = spendSaveBackup();
+  backup.settings.budget = { amt: 200, per: 'month' };
+  assert.equal(importSpendSave(backup, seedState('SGD')).state.settings.spendingLimit, 20000);
+  const withLimit = seedState('SGD');
+  withLimit.settings.spendingLimit = 50000;
+  assert.equal(importSpendSave(backup, withLimit).state.settings.spendingLimit, 50000);
+  backup.settings.budget = { amt: 50, per: 'week' };
+  assert.equal(importSpendSave(backup, seedState('SGD')).state.settings.spendingLimit, Math.round((5000 * 52) / 12));
 });
 
 test('import: an existing goal with the same name is reused, not duplicated', () => {

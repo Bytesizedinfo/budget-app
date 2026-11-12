@@ -21,6 +21,7 @@ export function demoState(today) {
   const amount = (min, max) => Math.round((min + random() * (max - min)) * 100);
   const pick = (list) => list[Math.floor(random() * list.length)];
 
+  state.settings.spendingLimit = 420000;
   const budgets = { c_food: 450, c_groceries: 450, c_transport: 180, c_housing: 2200, c_utilities: 250, c_shopping: 300, c_health: 150, c_fun: 200 };
   state.categories = state.categories.map((c) => (budgets[c.id] ? { ...c, monthlyBudget: budgets[c.id] * 100 } : c));
 

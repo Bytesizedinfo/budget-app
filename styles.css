@@ -269,6 +269,34 @@ code { font-size: 0.92em; background: var(--surface-2); padding: 1px 5px; border
 .hero-sub { color: var(--muted); font-size: 13.5px; margin-top: 6px; }
 .hero-text { color: var(--ink-2); max-width: 56ch; margin-bottom: 10px; }
 .hero .btn { justify-self: start; }
+.hero .btn-row { margin-top: 0; }
+.hero-top { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 12px; }
+.hero-label.over { color: var(--critical-text); }
+.segmented-sm span { padding: 5px 11px; font-size: 13px; }
+
+/* Warnings carry an icon and words, never colour alone. */
+.notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-top: 4px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  font-size: 13.5px;
+  font-weight: 550;
+  line-height: 1.4;
+}
+.notice .icon { margin-top: 1px; }
+.notice-warn { background: var(--track-warn); color: var(--warn-text); }
+.notice-over { background: color-mix(in srgb, var(--critical) 12%, transparent); color: var(--critical-text); }
+
+/* Total balance */
+.balance-value { font-size: 34px; font-weight: 700; letter-spacing: -0.02em; line-height: 1.15; }
+.balance-value.bad, .balance-amount.bad { color: var(--critical-text); }
+.balance-parts { display: flex; flex-wrap: wrap; gap: 8px 36px; margin-top: 12px; }
+.balance-parts > div { display: grid; gap: 1px; }
+.balance-label { font-size: 13px; color: var(--muted); }
+.balance-amount { font-size: 17px; font-weight: 650; font-variant-numeric: tabular-nums; }
 
 /* Stat tiles */
 .stat { padding: 16px 18px; }
@@ -314,7 +342,7 @@ code { font-size: 0.92em; background: var(--surface-2); padding: 1px 5px; border
 .row-btn:hover { background: var(--surface-2); border-radius: 10px; }
 .row-btn > .budget-top { padding: 10px 0; }
 
-.totals { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin: 0 0 14px; }
+.totals { display: grid; grid-template-columns: repeat(auto-fit, minmax(96px, 1fr)); gap: 12px; margin: 0 0 14px; }
 .totals dt { color: var(--muted); font-size: 13px; }
 .totals dd { margin: 0; font-size: 20px; font-weight: 700; letter-spacing: -0.01em; }
 .totals dd.over { color: var(--critical-text); }

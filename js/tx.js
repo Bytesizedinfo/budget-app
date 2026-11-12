@@ -1,6 +1,6 @@
 // Adding, editing and deleting transactions, plus the row used to list them.
 
-import { categoriesFor, categoryName } from './calc.js';
+import { categoriesFor, categoryName, safeToSpend } from './calc.js';
 import { daysInMonth, formatDay, isValidDate, monthOf, todayISO } from './dates.js';
 import { h, icon } from './dom.js';
 import { centsToInput, parseAmount } from './money.js';
@@ -66,9 +66,20 @@ export function transactionDialog(ctx, tx = null) {
       ctx.ui.lastCategory[kind] = categoryId;
       ctx.store.save('transactions', { ...tx, kind, amount, date, categoryId, note: data.get('note').trim() });
       if (!tx) ctx.ui.month = monthOf(date); // Show the month the new entry landed in.
-      ctx.toast(tx ? 'Transaction updated' : `${kind === 'income' ? 'Income' : 'Expense'} added`);
+      ctx.toast(tx ? 'Transaction updated' : `${kind === 'income' ? 'Income' : 'Expense'} added${kind === 'expense' ? limitNote(ctx, date) : ''}`);
     },
   });
+}
+
+// After a new expense this month, say where that leaves the monthly limit.
+function limitNote(ctx, date) {
+  const today = todayISO();
+  if (monthOf(date) !== monthOf(today)) return '';
+  const safe = safeToSpend(ctx.store.get(), monthOf(today), today);
+  if (!safe) return '';
+  if (safe.left < 0) return ` · ${ctx.money(-safe.left)} over your monthly limit`;
+  if (safe.todayLeft < 0) return ` · ${ctx.money(-safe.todayLeft)} over today’s share`;
+  return ` · ${ctx.money(safe.todayLeft)} left to spend today`;
 }
 
 export function deleteTransaction(ctx, tx) {

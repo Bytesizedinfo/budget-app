@@ -30,7 +30,7 @@ export function importSpendSave(raw, state) {
   const labels = settings.labels ?? [];
   const incomeCats = settings.incomeCats ?? [];
   const pots = settings.saveCats ?? [];
-  const summary = { income: 0, expenses: 0, moves: 0, skipped: 0, newCategories: [], renamed: [], archived: [], goals: [], emptyPots: [], recurring: [], unsupportedRecurring: [], currency: null };
+  const summary = { income: 0, expenses: 0, moves: 0, skipped: 0, newCategories: [], renamed: [], archived: [], goals: [], emptyPots: [], recurring: [], unsupportedRecurring: [], currency: null, spendingLimit: null };
 
   // ---- Categories ----
   const categories = new Map(); // id -> record to add or update
@@ -168,12 +168,17 @@ export function importSpendSave(raw, state) {
     }
   }
 
-  let nextSettings = state.settings;
+  const patch = {};
   const currency = SYMBOLS[String(settings.symbol ?? '').trim()];
-  if (currency && currency !== state.settings.currency) {
-    nextSettings = { ...state.settings, currency, updatedAt: Math.max(at, (state.settings.updatedAt ?? 0) + 1) };
-    summary.currency = currency;
+  if (currency && currency !== state.settings.currency) patch.currency = summary.currency = currency;
+  // Spend & Save's overall spending budget becomes the monthly limit, unless one is set here already.
+  const perMonth = { month: 1, week: 52 / 12, year: 1 / 12 }[settings.budget?.per];
+  if (perMonth && cents(settings.budget.amt) > 0 && !(state.settings.spendingLimit > 0)) {
+    patch.spendingLimit = summary.spendingLimit = Math.round(cents(settings.budget.amt) * perMonth);
   }
+  const nextSettings = Object.keys(patch).length
+    ? { ...state.settings, ...patch, updatedAt: Math.max(at, (state.settings.updatedAt ?? 0) + 1) }
+    : state.settings;
 
   const incoming = { schema: SCHEMA, settings: nextSettings, categories: [...categories.values()], transactions, recurring, goals, deleted: {} };
   return { state: mergeStates(state, incoming), summary };

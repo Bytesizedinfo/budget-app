@@ -64,6 +64,11 @@ export function budgetRow(ctx, { category, spent, budget }) {
       level === 'warn' ? h('span', { class: 'warn-note' }, icon('alert', 'icon-xs'), `${Math.round(ratio * 100)}% used`) : null));
 }
 
+// A warning ('warn') or problem ('over') message; the icon and words carry it, not colour alone.
+export function notice(level, text) {
+  return h('p', { class: `notice notice-${level}` }, icon('alert', 'icon-sm'), h('span', {}, text));
+}
+
 export function empty(text, action) {
   return h('div', { class: 'empty' }, h('p', {}, text), action);
 }
@@ -84,8 +89,8 @@ export function field(label, control, hint) {
     hint ? h('span', { class: 'field-hint' }, hint) : null);
 }
 
-export function segmented(name, options, value, onChange) {
-  return h('div', { class: 'segmented', role: 'radiogroup' },
+export function segmented(name, options, value, onChange, className = '') {
+  return h('div', { class: `segmented ${className}`.trim(), role: 'radiogroup' },
     options.map(([optionValue, label]) => h('label', {},
       h('input', { type: 'radio', name, value: optionValue, checked: optionValue === value, onchange: () => onChange(optionValue) }),
       h('span', {}, label))));

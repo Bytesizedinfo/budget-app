@@ -174,6 +174,46 @@ step('reports draw a 12-month chart with a table', async () => {
   expect($('#tooltip').textContent.includes('Income'), `tooltip lists income (tooltip says: "${$('#tooltip').textContent}")`);
 });
 
+step('the overview leads with what is safe to spend, by period, and the total balance', async () => {
+  await go('dashboard');
+  await until(() => $('.hero .segmented'), 'the safe-to-spend switch');
+  const label = () => $('.hero-label').textContent;
+  expect(/Safe to spend today|Over today’s share/.test(label()), label());
+  $$('.hero .segmented input')[1].click();
+  await until(() => /this week/.test(label()), 'the week view');
+  $$('.hero .segmented input')[2].click();
+  await until(() => /rest of/.test(label()) && !/week/.test(label()), 'the month view');
+  expect(/\d/.test($('.balance-value').textContent) && $('.balance-parts').textContent.includes('In savings goals'), 'total balance shown');
+});
+
+step('adding an expense says what is left to spend today', async () => {
+  $('.btn-add').click();
+  const dialog = await openDialog();
+  fill(dialog, 'amount', '3.20');
+  fill(dialog, 'note', 'UI check snack');
+  submit(dialog);
+  await dialogClosed();
+  await until(() => /left to spend today|over today’s share|over your monthly limit/.test($('#toast').textContent), () => `the limit in the toast (says "${$('#toast').textContent}")`);
+});
+
+step('the spending limit can be turned off and back on from Budgets', async () => {
+  await go('budgets');
+  button('Change').click();
+  let dialog = await openDialog();
+  fill(dialog, 'limit', '');
+  submit(dialog);
+  await dialogClosed();
+  await go('dashboard');
+  await until(() => !$('.hero .segmented') && /Left to spend|Over budget/.test($('.hero-label').textContent), 'the category-budget hero');
+  await go('budgets');
+  button('Set a limit').click();
+  dialog = await openDialog();
+  fill(dialog, 'limit', '4200');
+  submit(dialog);
+  await dialogClosed();
+  await until(() => $$('.card').some((c) => c.textContent.includes('Monthly spending limit') && c.textContent.includes('4,200.00')), 'the limit card');
+});
+
 step('changing currency reformats amounts', async () => {
   await go('settings');
   const select = $('#set-currency');

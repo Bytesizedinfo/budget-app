@@ -1,5 +1,5 @@
-import { budgetLevel, budgetSummary, inMonth, sortCategories, sumBy } from '../calc.js';
-import { formatMonthName } from '../dates.js';
+import { budgetLevel, budgetSummary, inMonth, safeToSpend, sortCategories, sumBy } from '../calc.js';
+import { formatMonthName, formatShortDate, todayISO } from '../dates.js';
 import { h, icon } from '../dom.js';
 import { centsToInput, parseAmount } from '../money.js';
 import { budgetRow, card, checkbox, confirmDialog, empty, field, meter, openDialog, segmented, viewHead } from '../ui.js';
@@ -19,6 +19,7 @@ export function renderBudgets(ctx) {
       actions: [h('button', { type: 'button', class: 'btn', onclick: () => categoryDialog(ctx) }, icon('plus'), 'New category')],
     }),
     h('div', { class: 'stack' },
+      limitCard(ctx, month),
       summaryCard(ctx, summary, month),
       card({ title: 'Spending categories', sub: 'Select a category to set or change its monthly budget.', cls: 'card-list' },
         h('div', { class: 'row-list' }, summary.rows.map((row) => h('button', { type: 'button', class: 'row-btn', onclick: edit(row.category) },
@@ -43,10 +44,53 @@ export function renderBudgets(ctx) {
         : null));
 }
 
+// One overall limit for everything spent in a month, bills included.
+function limitCard(ctx, month) {
+  const safe = safeToSpend(ctx.store.get(), month, todayISO());
+  if (!safe) {
+    return card({ title: 'Monthly spending limit', action: h('button', { type: 'button', class: 'btn btn-sm btn-primary', onclick: () => limitDialog(ctx) }, 'Set a limit') },
+      h('p', { class: 'card-text' }, 'One amount for all your spending each month, bills included. The Overview then shows what’s safe to spend today and this week.'));
+  }
+  const over = safe.left < 0;
+  return card({ title: 'Monthly spending limit', sub: formatMonthName(month), action: h('button', { type: 'button', class: 'btn btn-sm', onclick: () => limitDialog(ctx) }, icon('edit', 'icon-sm'), 'Change') },
+    h('dl', { class: 'totals' },
+      h('div', {}, h('dt', {}, 'Limit'), h('dd', {}, ctx.money(safe.limit))),
+      h('div', {}, h('dt', {}, 'Spent'), h('dd', {}, ctx.money(safe.spent))),
+      safe.reserved ? h('div', {}, h('dt', {}, 'Bills to come'), h('dd', {}, ctx.money(safe.reserved))) : null,
+      h('div', {}, h('dt', {}, over ? 'Over by' : 'Left'), h('dd', { class: over ? 'over' : '' }, ctx.money(Math.abs(safe.left))))),
+    meter((safe.spent + safe.reserved) / safe.limit, safe.level, 'meter-lg'),
+    safe.upcoming.length
+      ? h('p', { class: 'card-foot' }, `Set aside for bills: ${safe.upcoming.map((u) => `${u.rule.name} ${ctx.money(u.rule.amount)} on ${formatShortDate(u.date)}`).join(', ')}.`)
+      : null);
+}
+
+export function limitDialog(ctx) {
+  const current = ctx.store.get().settings.spendingLimit;
+  openDialog({
+    title: 'Monthly spending limit',
+    content: h('div', { class: 'form-grid' },
+      field('Limit per month',
+        h('input', { name: 'limit', class: 'input input-amount', inputmode: 'decimal', autocomplete: 'off', autofocus: true, placeholder: 'No limit', value: current > 0 ? centsToInput(current, ctx.currency()) : '' }),
+        'Covers all your spending, bills included. Leave it empty to turn the limit off. Category budgets still work alongside it.')),
+    onSubmit(data) {
+      const text = String(data.get('limit') ?? '').trim();
+      if (!text) {
+        ctx.store.setSettings({ spendingLimit: null });
+        ctx.toast('Spending limit turned off');
+        return;
+      }
+      const limit = parseAmount(text);
+      if (!limit) throw new Error('Enter the limit as an amount, like 200 or 200.00, or leave it empty.');
+      ctx.store.setSettings({ spendingLimit: limit });
+      ctx.toast(`Monthly limit set to ${ctx.money(limit)}`);
+    },
+  });
+}
+
 function summaryCard(ctx, { totalBudget, budgetedSpent, unbudgeted }, month) {
   if (!totalBudget) {
-    return card({ title: 'Set your monthly budgets' },
-      h('p', { class: 'card-text' }, 'Choose a spending category below and give it a monthly limit. Budgets repeat every month, and you can change them any time.'));
+    return card({ title: 'Category budgets' },
+      h('p', { class: 'card-text' }, 'You can also give a spending category its own monthly limit: select it below. Budgets repeat every month, and you can change them any time.'));
   }
   const left = totalBudget - budgetedSpent;
   return card({ title: `${formatMonthName(month)} at a glance` },

@@ -3,7 +3,9 @@
 A personal monthly budget that runs on GitHub Pages and keeps its data in a private GitHub repository.
 
 - Track income and expenses by category.
-- Set monthly budgets per category and see what's left to spend.
+- Set one overall monthly spending limit, bills included. The Overview then shows what's **safe to spend** today, this week and this month, with bills still to come set aside, and warns you when you're spending too fast.
+- See your **total balance**: everything recorded as income minus spending, split into what's in savings goals and what's left as spending money.
+- Optionally set monthly budgets per category too.
 - See charts of spending by category and income versus spending over 12 months.
 - Track savings goals, with or without a target amount.
 - Add recurring bills and income, which are recorded automatically each month.

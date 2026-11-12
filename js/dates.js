@@ -46,6 +46,9 @@ const toDate = (iso) => {
   return new Date(y, m - 1, d);
 };
 
+// Monday = 0 … Sunday = 6.
+export const dayOfWeek = (iso) => (toDate(iso).getDay() + 6) % 7;
+
 const formats = new Map();
 function format(iso, options) {
   const key = JSON.stringify(options);

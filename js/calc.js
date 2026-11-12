@@ -1,4 +1,5 @@
-import { addMonths, monthOf, monthRange } from './dates.js';
+import { addMonths, dayOf, dayOfWeek, daysInMonth, monthOf, monthRange } from './dates.js';
+import { occurrenceId, occurrenceIn } from './recurring.js';
 
 export const byNewest = (a, b) => String(b.date).localeCompare(String(a.date)) || (b.updatedAt ?? 0) - (a.updatedAt ?? 0);
 
@@ -64,6 +65,57 @@ export function budgetSummary(state, month) {
   }
   for (const [id, amount] of spent) if (!shown.has(id)) unbudgeted += amount;
   return { rows, totalBudget, budgetedSpent, unbudgeted };
+}
+
+// "Safe to spend" against one overall monthly limit, worked out the way Spend & Save does:
+// what's left after this month's spending and the bills still to come, spread evenly
+// over the days that remain. Returns null when no limit is set.
+export function safeToSpend(state, month, today) {
+  const limit = state.settings.spendingLimit;
+  if (!(limit > 0)) return null;
+  const current = monthOf(today);
+  const monthTransactions = inMonth(state.transactions, month);
+  const spent = totals(monthTransactions).expense;
+  const ids = new Set(monthTransactions.map((t) => t.id));
+  const upcoming = month < current ? [] : state.recurring
+    .filter((rule) => rule.kind === 'expense')
+    .map((rule) => ({ rule, date: occurrenceIn(rule, month), id: occurrenceId(rule.id, month) }))
+    .filter(({ date, id }) => date && (month > current || date > today) && !ids.has(id) && !(id in state.deleted))
+    .sort((a, b) => a.date.localeCompare(b.date));
+  const reserved = upcoming.reduce((sum, u) => sum + u.rule.amount, 0);
+  const left = limit - spent - reserved;
+  const result = {
+    limit, spent, reserved, upcoming, left, level: left < 0 ? 'over' : 'ok', past: month < current, future: month > current,
+    daysLeft: null, spentToday: 0, perDay: null, todayLeft: null, weekLeft: null, evenShare: null,
+  };
+  if (month !== current) return result;
+
+  const daysLeft = daysInMonth(month) - dayOf(today) + 1;
+  const spentToday = totals(monthTransactions.filter((t) => t.date === today)).expense;
+  const pool = Math.max(0, left + spentToday); // What today and the rest of the month share, before today's spending.
+  const perDay = Math.floor(pool / daysLeft);
+  const weekDaysLeft = Math.min(7 - dayOfWeek(today), daysLeft); // Monday–Sunday, cut off at month end.
+  // The pace to compare against leaves bills out, so a big bill early on doesn't read as overspending.
+  const bills = monthTransactions.filter((t) => t.kind === 'expense' && t.recurringId).reduce((sum, t) => sum + t.amount, 0) + reserved;
+  const evenShare = Math.max(0, limit - bills) / daysInMonth(month);
+  return {
+    ...result,
+    daysLeft,
+    spentToday,
+    perDay,
+    todayLeft: perDay - spentToday,
+    weekLeft: Math.floor((pool * weekDaysLeft) / daysLeft) - spentToday,
+    evenShare: Math.floor(evenShare),
+    level: left < 0 ? 'over' : perDay < evenShare * 0.75 ? 'warn' : 'ok',
+  };
+}
+
+// How much there is in total up to a date: everything recorded as income minus everything
+// spent, and how much of that has been put into savings goals.
+export function balance(state, asOf) {
+  const { net } = totals(state.transactions.filter((t) => typeof t.date === 'string' && t.date <= asOf));
+  const savings = state.goals.reduce((sum, g) => sum + g.contributions.filter((c) => c.date <= asOf).reduce((s, c) => s + c.amount, 0), 0);
+  return { total: net, savings, spending: net - savings };
 }
 
 export function trend(state, endMonth, count = 12) {
