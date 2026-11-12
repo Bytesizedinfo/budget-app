@@ -1,7 +1,7 @@
 // Shared building blocks for the views: headers, cards, meters, form fields and dialogs.
 
 import { budgetLevel } from './calc.js';
-import { addMonths, formatMonth, monthOf, todayISO } from './dates.js';
+import { addMonths, formatMonth, monthOf, TIMEFRAMES, timeframe, todayISO } from './dates.js';
 import { h, icon } from './dom.js';
 
 export function viewHead(ctx, title, { month = false, actions = [] } = {}) {
@@ -149,4 +149,41 @@ export function confirmDialog({ title, message, confirm = 'Delete', danger = tru
     });
     dialog.addEventListener('close', () => resolve(confirmed));
   });
+}
+
+// The time frame shared by the Overview and Transactions, remembered on this device.
+const TIMEFRAME_KEY = 'budget-timeframe';
+
+export function loadTimeframe() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(TIMEFRAME_KEY) || 'null');
+    if (saved && TIMEFRAMES.some(([choice]) => choice === saved.choice)) return saved;
+  } catch {
+    // Storage can be blocked; fall back to this month.
+  }
+  return { choice: 'month' };
+}
+
+export function timeframePicker(ctx) {
+  const set = (patch) => {
+    ctx.ui.timeframe = { ...ctx.ui.timeframe, ...patch };
+    try {
+      localStorage.setItem(TIMEFRAME_KEY, JSON.stringify(ctx.ui.timeframe));
+    } catch {
+      // Not remembered on this device, but still applied.
+    }
+    ctx.refresh();
+  };
+  const current = ctx.ui.timeframe;
+  const range = timeframe(current.choice, todayISO(), current);
+  const choice = h('select', {
+    id: 'timeframe',
+    class: 'input timeframe-select',
+    'aria-label': 'Time frame',
+    value: current.choice,
+    onchange: (event) => set({ choice: event.target.value }),
+  }, TIMEFRAMES.map(([value, label]) => h('option', { value }, label)));
+  if (current.choice !== 'custom') return h('div', { class: 'timeframe' }, choice);
+  const date = (id, label, key) => h('input', { id, type: 'date', class: 'input', 'aria-label': label, value: range[key], onchange: (event) => set({ [key]: event.target.value }) });
+  return h('div', { class: 'timeframe' }, choice, h('span', { class: 'timeframe-dates' }, date('timeframe-from', 'From', 'from'), h('span', { class: 'muted' }, 'to'), date('timeframe-to', 'To', 'to')));
 }

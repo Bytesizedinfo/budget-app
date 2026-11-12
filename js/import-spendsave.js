@@ -30,7 +30,7 @@ export function importSpendSave(raw, state) {
   const labels = settings.labels ?? [];
   const incomeCats = settings.incomeCats ?? [];
   const pots = settings.saveCats ?? [];
-  const summary = { income: 0, expenses: 0, moves: 0, skipped: 0, newCategories: [], renamed: [], archived: [], goals: [], emptyPots: [], recurring: [], unsupportedRecurring: [], currency: null, spendingLimit: null };
+  const summary = { income: 0, expenses: 0, moves: 0, skipped: 0, countsIn: 0, newCategories: [], renamed: [], archived: [], goals: [], emptyPots: [], recurring: [], unsupportedRecurring: [], currency: null, spendingLimit: null };
 
   // ---- Categories ----
   const categories = new Map(); // id -> record to add or update
@@ -107,10 +107,19 @@ export function importSpendSave(raw, state) {
       }
       const kind = t.t === 'in' ? 'income' : 'expense';
       summary[kind === 'income' ? 'income' : 'expenses'] += 1;
+      // Pay logged late in a month for the next one (Spend & Save's `for`) counts in that month here too.
+      const forMonth = kind === 'income' && /^\d{4}-\d{2}$/.test(t.for ?? '') && t.for !== t.d.slice(0, 7) ? t.for : null;
       if (isNew(`ss-${t.id}`)) {
         const source = kind === 'income' ? t.cat : t.label;
         const categoryId = map[kind][source] ?? (kind === 'expense' ? guessFromNote(t.note) : null) ?? fallback(kind);
-        transactions.push({ id: `ss-${t.id}`, date: t.d, kind, amount, categoryId, note: String(t.note ?? '').trim(), updatedAt: at });
+        transactions.push({ id: `ss-${t.id}`, date: t.d, kind, amount, categoryId, note: String(t.note ?? '').trim(), updatedAt: at, ...(forMonth ? { month: forMonth } : {}) });
+      } else if (forMonth) {
+        // Brought in before this was understood: mark it, unless it has been edited here since.
+        const existing = state.transactions.find((r) => r.id === `ss-${t.id}`);
+        if (existing && !existing.month && existing.date === t.d && existing.amount === amount) {
+          transactions.push({ ...existing, month: forMonth, updatedAt: Math.max(at, (existing.updatedAt ?? 0) + 1) });
+          summary.countsIn += 1;
+        }
       }
       // Income set aside into savings pots, and spending paid straight out of a pot.
       if (kind === 'income') for (const [pot, value] of Object.entries(t.save ?? {})) addMove(pot, `ss-${t.id}-${pot}`, t.d, cents(value));

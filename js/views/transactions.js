@@ -1,30 +1,32 @@
-import { byNewest, categoryName, inMonth, sortCategories, totals } from '../calc.js';
+import { byNewest, categoryName, inRange, sortCategories, totals } from '../calc.js';
 import { transactionsCsv } from '../csv.js';
-import { formatDay, formatMonth, todayISO } from '../dates.js';
+import { formatDay, timeframe, timeframeText, todayISO } from '../dates.js';
 import { download, h, icon } from '../dom.js';
 import { transactionDialog, txRow } from '../tx.js';
-import { card, empty, viewHead } from '../ui.js';
+import { card, empty, timeframePicker, viewHead } from '../ui.js';
 
 export function renderTransactions(ctx) {
   const state = ctx.store.get();
   const filter = ctx.ui.txFilter;
-  const monthTransactions = inMonth(state.transactions, ctx.ui.month);
+  // The time frame is picked at the top and shared with the Overview (Today … All time, or custom dates).
+  const range = timeframe(ctx.ui.timeframe.choice, todayISO(), ctx.ui.timeframe);
+  const rangeTransactions = inRange(state.transactions, range);
   const summary = h('p', { class: 'list-summary' });
   const list = h('div', { class: 'tx-list' });
 
   const update = () => {
     const query = filter.q.trim().toLowerCase();
-    const rows = monthTransactions
+    const rows = rangeTransactions
       .filter((t) => filter.kind === 'all' || t.kind === filter.kind)
       .filter((t) => filter.category === 'all' || t.categoryId === filter.category)
       .filter((t) => !query || `${t.note ?? ''} ${categoryName(state, t.categoryId)}`.toLowerCase().includes(query))
       .sort(byNewest);
     const sum = totals(rows);
     summary.textContent = rows.length
-      ? `${rows.length} ${rows.length === 1 ? 'transaction' : 'transactions'} · ${ctx.money(sum.income)} in · ${ctx.money(sum.expense)} out`
+      ? `${timeframeText(range)} · ${rows.length} ${rows.length === 1 ? 'transaction' : 'transactions'} · ${ctx.money(sum.income)} in · ${ctx.money(sum.expense)} out · net ${ctx.money(sum.net)}`
       : '';
-    if (!monthTransactions.length) {
-      list.replaceChildren(empty(`No transactions in ${formatMonth(ctx.ui.month)}.`,
+    if (!rangeTransactions.length) {
+      list.replaceChildren(empty(`No transactions in ${timeframeText(range)}.`,
         h('button', { type: 'button', class: 'btn', onclick: () => transactionDialog(ctx) }, icon('plus'), 'Add a transaction')));
       return;
     }
@@ -79,8 +81,10 @@ export function renderTransactions(ctx) {
   update();
   return h('div', { class: 'view' },
     viewHead(ctx, 'Transactions', {
-      month: true,
-      actions: [h('button', { type: 'button', class: 'btn', onclick: () => download(`budget-transactions-${todayISO()}.csv`, transactionsCsv(state), 'text/csv') }, icon('download'), 'Export CSV')],
+      actions: [
+        timeframePicker(ctx),
+        h('button', { type: 'button', class: 'btn', onclick: () => download(`budget-transactions-${todayISO()}.csv`, transactionsCsv(state, rangeTransactions), 'text/csv') }, icon('download'), 'Export CSV'),
+      ],
     }),
     h('div', { class: 'filters' }, h('div', { class: 'search' }, icon('search'), search), kind, category),
     card({ cls: 'card-list' }, summary, list));

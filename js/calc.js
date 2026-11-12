@@ -3,8 +3,19 @@ import { occurrenceId, occurrenceIn } from './recurring.js';
 
 export const byNewest = (a, b) => String(b.date).localeCompare(String(a.date)) || (b.updatedAt ?? 0) - (a.updatedAt ?? 0);
 
+// The month an entry counts in. Pay can be marked for another month, e.g. paid on 26 Oct for November:
+// it counts in November's income, while its date (and the balance) stay on the day the money arrived.
+export const monthKey = (t) => (/^\d{4}-\d{2}$/.test(t.month ?? '') ? t.month : String(t.date).slice(0, 7));
+
 export function inMonth(transactions, month) {
-  return transactions.filter((t) => typeof t.date === 'string' && t.date.startsWith(month));
+  return transactions.filter((t) => typeof t.date === 'string' && monthKey(t) === month);
+}
+
+// Entries in a time frame (see timeframe() in dates.js). A whole month goes by the month each entry counts in;
+// any other range by the date it happened.
+export function inRange(transactions, range) {
+  if (range.month) return inMonth(transactions, range.month);
+  return transactions.filter((t) => typeof t.date === 'string' && t.date >= range.from && t.date <= range.to);
 }
 
 export function totals(transactions) {
@@ -122,7 +133,7 @@ export function trend(state, endMonth, count = 12) {
   const months = monthRange(addMonths(endMonth, 1 - count), endMonth);
   const sums = new Map(months.map((month) => [month, { month, income: 0, expense: 0 }]));
   for (const t of state.transactions) {
-    const row = sums.get(String(t.date).slice(0, 7));
+    const row = sums.get(monthKey(t));
     if (row) row[t.kind === 'income' ? 'income' : 'expense'] += t.amount;
   }
   return [...sums.values()];
@@ -139,4 +150,26 @@ export function goalProgress(goal, today) {
     else progress.perMonth = Math.ceil(remaining / monthRange(monthOf(today), monthOf(goal.deadline)).length);
   }
   return progress;
+}
+
+// What can be spent each day for the rest of this month, from the money actually there: spending money
+// (everything in minus everything out, less what's in savings goals) minus bills still to come this month,
+// shared over the days left. Today's spending is added back first, so it only lowers today's share.
+export function spendPerDay(state, today) {
+  const month = monthOf(today);
+  const daysLeft = daysInMonth(month) - dayOf(today) + 1;
+  const { spending } = balance(state, today);
+  const dated = state.transactions.filter((t) => typeof t.date === 'string' && t.date.startsWith(month));
+  const ids = new Set(dated.map((t) => t.id));
+  const upcoming = state.recurring
+    .filter((rule) => rule.kind === 'expense')
+    .map((rule) => ({ rule, date: occurrenceIn(rule, month), id: occurrenceId(rule.id, month) }))
+    .filter(({ date, id }) => date && date > today && !ids.has(id) && !(id in state.deleted))
+    .sort((a, b) => a.date.localeCompare(b.date));
+  const reserved = upcoming.reduce((sum, u) => sum + u.rule.amount, 0);
+  const spentToday = totals(dated.filter((t) => t.date === today)).expense;
+  const free = spending - reserved;
+  const pool = Math.max(0, free + spentToday);
+  const perDay = Math.floor(pool / daysLeft);
+  return { spending, reserved, upcoming, free, daysLeft, spentToday, perDay, todayLeft: perDay - spentToday };
 }

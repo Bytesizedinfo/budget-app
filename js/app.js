@@ -8,6 +8,7 @@ import { createSync } from './sync.js';
 import { syncPill } from './syncui.js';
 import { applyTheme, isDark, onThemeChange, readTheme, saveTheme } from './theme.js';
 import { transactionDialog } from './tx.js';
+import { loadTimeframe } from './ui.js';
 import { renderBudgets } from './views/budgets.js';
 import { renderDashboard } from './views/dashboard.js';
 import { renderGoals } from './views/goals.js';
@@ -40,7 +41,7 @@ const ctx = {
   store,
   sync,
   demo,
-  ui: { month: monthOf(todayISO()), txFilter: { q: '', kind: 'all', category: 'all' }, lastCategory: {} },
+  ui: { month: monthOf(todayISO()), timeframe: loadTimeframe(), txFilter: { q: '', kind: 'all', category: 'all' }, lastCategory: {} },
   currency: () => store.get().settings.currency,
   money: (cents, options) => formatMoney(cents, ctx.currency(), options),
   refresh: () => render(),

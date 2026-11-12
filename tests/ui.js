@@ -107,12 +107,28 @@ step('search filters the list', async () => {
   search.dispatchEvent(new Event('input', { bubbles: true }));
 });
 
-step('month switcher moves between months', async () => {
-  const label = $('.month-label').textContent;
-  $('[aria-label="Previous month"]').click();
-  await until(() => $('.month-label').textContent !== label, 'previous month');
-  $('.month-label').click();
-  await until(() => $('.month-label').textContent === label, 'back to this month');
+step('the time frame changes which transactions are listed, and custom dates work', async () => {
+  const pick = (value) => {
+    const select = $('#timeframe');
+    select.value = value;
+    select.dispatchEvent(new Event('change', { bubbles: true }));
+  };
+  const count = () => $$('.tx-row').length;
+  pick('all');
+  await until(() => $('#timeframe').value === 'all' && /All time/.test($('.list-summary').textContent), 'all time');
+  const all = count();
+  pick('today');
+  await until(() => $('#timeframe').value === 'today', 'today');
+  expect(count() <= all, 'today lists no more than all time');
+  pick('custom');
+  await until(() => $('#timeframe-from') && $('#timeframe-to'), 'custom date fields');
+  const from = $('#timeframe-from');
+  from.value = '2000-01-01';
+  from.dispatchEvent(new Event('change', { bubbles: true }));
+  await until(() => count() === all, () => `custom range from 2000 lists everything (${count()} of ${all})`);
+  expect(frame.contentWindow.localStorage.getItem('budget-timeframe').includes('custom'), 'remembered on this device');
+  pick('month');
+  await until(() => $('#timeframe').value === 'month', 'back to this month');
 });
 
 step('set a category budget', async () => {
@@ -184,6 +200,39 @@ step('the overview leads with what is safe to spend, by period, and the total ba
   $$('.hero .segmented input')[2].click();
   await until(() => /rest of/.test(label()) && !/week/.test(label()), 'the month view');
   expect(/\d/.test($('.balance-value').textContent) && $('.balance-parts').textContent.includes('In savings goals'), 'total balance shown');
+});
+
+step('spend per day sits next to safe to spend and explains itself', async () => {
+  const card = await until(() => $('.perday'), 'the spend-per-day card');
+  expect(/You can spend per day/.test(card.textContent) && /a day/.test($('.perday-value').textContent), card.textContent);
+  expect(card.parentElement.classList.contains('hero-row'), 'beside the safe-to-spend card');
+  button('How is this worked out?', card).click();
+  const dialog = await openDialog();
+  expect(/shared over the/.test(dialog.textContent), dialog.textContent.slice(0, 200));
+  button('Done', dialog).click();
+  await dialogClosed();
+});
+
+step('every overview number opens a sheet listing the entries behind it', async () => {
+  for (const label of ['Income', 'Spent', 'Net']) {
+    $$('.stat-btn').find((b) => b.querySelector('.stat-label').textContent.startsWith(label)).click();
+    const dialog = await openDialog();
+    expect(dialog.textContent.includes('how it’s worked out'), `${label} sheet title`);
+    expect(label === 'Net' || dialog.querySelectorAll('.bd-list li').length > 0, `${label} lists entries`);
+    button('Done', dialog).click();
+    await dialogClosed();
+  }
+  $('.balance-value').click();
+  let dialog = await openDialog();
+  const listed = dialog.querySelectorAll('.bd-list li').length;
+  expect(listed > 3 && /Everything that came in up to today/.test(dialog.textContent), `total balance lists every entry (${listed})`);
+  button('Done', dialog).click();
+  await dialogClosed();
+  $$('.balance-parts .tap')[0].click();
+  dialog = await openDialog();
+  expect(/In savings goals/.test(dialog.textContent), 'savings sheet');
+  button('Done', dialog).click();
+  await dialogClosed();
 });
 
 step('adding an expense says what is left to spend today', async () => {

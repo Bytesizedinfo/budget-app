@@ -1,5 +1,5 @@
-import { balance, budgetSummary, goalProgress, safeToSpend, totals, trend } from '../js/calc.js';
-import { addMonths, dateInMonth, daysInMonth, isValidDate, monthRange } from '../js/dates.js';
+import { balance, budgetSummary, goalProgress, inMonth, inRange, monthKey, safeToSpend, spendPerDay, totals, trend } from '../js/calc.js';
+import { addMonths, dateInMonth, daysInMonth, isValidDate, monthRange, previousTimeframe, timeframe } from '../js/dates.js';
 import { importSpendSave } from '../js/import-spendsave.js';
 import { mergeStates } from '../js/merge.js';
 import { centsToInput, formatMoney, parseAmount } from '../js/money.js';
@@ -601,6 +601,90 @@ test('sync: a budget file deleted on GitHub is recreated', async () => {
   server.sha = null;
   await sync.syncNow();
   assert.deepEqual(server.state().transactions.map((t) => t.id), ['keep']);
+});
+
+
+// ---------- time frames, pay counted in the month it's for, spend per day ----------
+
+test('pay marked for the next month counts in that month, while the balance keeps its real date', () => {
+  const pay = tx('p', '2026-10-26', 80000, { kind: 'income', month: '2026-11' });
+  const list = [pay, tx('a', '2026-11-03', 1000), tx('b', '2026-10-27', 500)];
+  assert.equal(monthKey(pay), '2026-11');
+  assert.equal(monthKey(list[1]), '2026-11');
+  assert.deepEqual(totals(inMonth(list, '2026-11')), { income: 80000, expense: 1000, net: 79000 });
+  assert.deepEqual(totals(inMonth(list, '2026-10')), { income: 0, expense: 500, net: -500 });
+  const state = seedState('SGD');
+  state.transactions = list;
+  const rows = trend(state, '2026-11', 2);
+  assert.deepEqual(rows.map((r) => [r.month, r.income]), [['2026-10', 0], ['2026-11', 80000]]);
+  assert.equal(balance(state, '2026-10-31').total, 79500, 'the money was there from 26 Oct');
+});
+
+test('timeframes: quick picks and custom dates', () => {
+  const today = '2026-11-12'; // a Thursday
+  assert.deepEqual([timeframe('today', today).from, timeframe('today', today).to], [today, today]);
+  assert.deepEqual([timeframe('week', today).from, timeframe('week', today).to], ['2026-11-09', '2026-11-15']);
+  assert.deepEqual([timeframe('last7', today).from, timeframe('last7', today).to], ['2026-11-06', today]);
+  assert.deepEqual([timeframe('last30', today).from, timeframe('last30', today).to], ['2026-10-14', today]);
+  assert.deepEqual([timeframe('month', today).month, timeframe('month', today).to], ['2026-11', '2026-11-30']);
+  assert.equal(timeframe('lastmonth', today).month, '2026-10');
+  assert.deepEqual([timeframe('year', today).from, timeframe('year', today).to], ['2026-01-01', '2026-12-31']);
+  assert.equal(timeframe('all', today).from, '0000-01-01');
+  const custom = timeframe('custom', today, { from: '2026-11-25', to: '2026-10-26' });
+  assert.deepEqual([custom.from, custom.to, custom.month], ['2026-10-26', '2026-11-25', undefined], 'reversed dates are swapped');
+  assert.equal(timeframe('custom', today, {}).from, '2026-10-14', 'no dates yet: the last 30 days');
+});
+
+test('inRange: whole months use the month an entry counts in, other ranges the date', () => {
+  const pay = tx('p', '2026-10-26', 80000, { kind: 'income', month: '2026-11' });
+  const list = [pay, tx('a', '2026-11-03', 1000)];
+  assert.equal(inRange(list, timeframe('month', '2026-11-12')).length, 2);
+  assert.equal(inRange(list, timeframe('lastmonth', '2026-11-12')).length, 0);
+  assert.equal(inRange(list, timeframe('custom', '2026-11-12', { from: '2026-10-26', to: '2026-10-31' })).length, 1, 'by date');
+  assert.equal(inRange(list, timeframe('last30', '2026-11-12')).length, 2);
+  assert.equal(inRange(list, timeframe('all', '2026-11-12')).length, 2);
+});
+
+test('previousTimeframe: the stretch just before, of the same length', () => {
+  const today = '2026-11-12';
+  assert.equal(previousTimeframe(timeframe('month', today)).month, '2026-10');
+  assert.equal(previousTimeframe(timeframe('lastmonth', today)).month, '2026-09');
+  const p7 = previousTimeframe(timeframe('last7', today));
+  assert.deepEqual([p7.from, p7.to], ['2026-10-30', '2026-11-05']);
+  assert.equal(previousTimeframe(timeframe('year', today)).from, '2025-01-01');
+  assert.equal(previousTimeframe(timeframe('today', today)).from, '2026-11-11');
+  assert.equal(previousTimeframe(timeframe('all', today)), null);
+});
+
+test('spend per day comes from the money you have, less bills still to come', () => {
+  const state = seedState('SGD');
+  state.transactions = [tx('i', '2026-11-01', 100000, { kind: 'income' }), tx('a', '2026-11-12', 2000), tx('old', '2026-11-02', 3000)];
+  state.goals = [{ id: 'g', name: 'Trip', target: null, updatedAt: 1, contributions: [{ id: 'c', date: '2026-11-01', amount: 40000 }] }];
+  state.recurring = [rule({ id: 'phone', amount: 3000, startDate: '2026-11-20' }), rule({ id: 'gym', amount: 2000, startDate: '2026-11-05' })];
+  const d = spendPerDay(state, '2026-11-12');
+  assert.equal(d.spending, 100000 - 2000 - 3000 - 40000);
+  assert.equal(d.reserved, 3000, 'only the phone bill is still to come this month');
+  assert.equal(d.daysLeft, 19);
+  assert.equal(d.spentToday, 2000);
+  assert.equal(d.perDay, Math.floor((55000 - 3000 + 2000) / 19));
+  assert.equal(d.todayLeft, d.perDay - 2000);
+  state.transactions.push(tx('big', '2026-11-11', 60000));
+  const short = spendPerDay(state, '2026-11-12');
+  assert.ok(short.free < 0 && short.perDay === 0, 'nothing left after bills');
+});
+
+test('import: pay meant for the next month counts there, and an earlier import gets fixed', () => {
+  const backup = spendSaveBackup();
+  backup.months['m-2026-08'].tx[0].for = '2026-09';
+  const { state } = importSpendSave(backup, seedState('SGD'));
+  assert.equal(state.transactions.find((t) => t.id === 'ss-a1').month, '2026-09');
+  // An import from before this change has no month; importing again marks it, unless it was edited since.
+  const old = { ...state, transactions: state.transactions.map((t) => (t.id === 'ss-a1' ? (({ month, ...rest }) => rest)(t) : t)) };
+  const fixed = importSpendSave(backup, old);
+  assert.equal(fixed.state.transactions.find((t) => t.id === 'ss-a1').month, '2026-09');
+  assert.equal(fixed.summary.countsIn, 1);
+  const edited = { ...old, transactions: old.transactions.map((t) => (t.id === 'ss-a1' ? { ...t, amount: 99, updatedAt: Date.now() } : t)) };
+  assert.equal(importSpendSave(backup, edited).state.transactions.find((t) => t.id === 'ss-a1').month, undefined, 'an edited entry is left alone');
 });
 
 // ---------- runner ----------

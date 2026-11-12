@@ -1,7 +1,7 @@
 // Adding, editing and deleting transactions, plus the row used to list them.
 
-import { categoriesFor, categoryName, safeToSpend } from './calc.js';
-import { daysInMonth, formatDay, isValidDate, monthOf, todayISO } from './dates.js';
+import { categoriesFor, categoryName, monthKey, safeToSpend } from './calc.js';
+import { addMonths, daysInMonth, formatDay, formatMonthName, isValidDate, monthOf, todayISO } from './dates.js';
 import { h, icon } from './dom.js';
 import { centsToInput, parseAmount } from './money.js';
 import { field, initialBadge, openDialog, segmented, signedAmount } from './ui.js';
@@ -27,10 +27,17 @@ export function transactionDialog(ctx, tx = null) {
   };
   fillCategories();
 
+  // Pay that lands at the end of a month can count in the next one (its date stays the day it arrived).
+  const counts = h('select', { name: 'counts', class: 'input', value: tx?.month && tx.month !== monthOf(tx.date) ? 'next' : 'same' },
+    h('option', { value: 'same' }, 'The month it came in'), h('option', { value: 'next' }, 'The next month'));
+  const countsField = field('Counts in', counts, 'For pay that lands near the end of a month but is for the next one.');
+  countsField.hidden = kind !== 'income';
+
   const content = h('div', { class: 'form-grid' },
     segmented('kind', [['expense', 'Expense'], ['income', 'Income']], kind, (value) => {
       kind = value;
       fillCategories();
+      countsField.hidden = kind !== 'income';
     }),
     field('Amount', h('input', {
       name: 'amount',
@@ -44,6 +51,7 @@ export function transactionDialog(ctx, tx = null) {
     h('div', { class: 'form-row' },
       field('Category', category),
       field('Date', h('input', { name: 'date', type: 'date', class: 'input', value: tx?.date ?? defaultDate(ctx.ui.month) }))),
+    countsField,
     field('Note', h('input', { name: 'note', class: 'input', maxLength: 120, placeholder: 'Optional', value: tx?.note ?? '' })),
     tx?.recurringId
       ? h('p', { class: 'field-hint' }, icon('repeat', 'icon-xs'), ' Added by a recurring item. Changes here only affect this entry.')
@@ -64,7 +72,10 @@ export function transactionDialog(ctx, tx = null) {
       const categoryId = data.get('category');
       if (!categoryId) throw new Error('Choose a category. You can add categories on the Budgets page.');
       ctx.ui.lastCategory[kind] = categoryId;
-      ctx.store.save('transactions', { ...tx, kind, amount, date, categoryId, note: data.get('note').trim() });
+      const record = { ...tx, kind, amount, date, categoryId, note: data.get('note').trim() };
+      if (kind === 'income' && data.get('counts') === 'next') record.month = addMonths(monthOf(date), 1);
+      else delete record.month;
+      ctx.store.save('transactions', record);
       if (!tx) ctx.ui.month = monthOf(date); // Show the month the new entry landed in.
       ctx.toast(tx ? 'Transaction updated' : `${kind === 'income' ? 'Income' : 'Expense'} added${kind === 'expense' ? limitNote(ctx, date) : ''}`);
     },
@@ -90,7 +101,8 @@ export function deleteTransaction(ctx, tx) {
 
 export function txRow(ctx, tx, { showDate = false } = {}) {
   const name = categoryName(ctx.store.get(), tx.categoryId);
-  const meta = [tx.note ? name : null, showDate ? formatDay(tx.date) : null].filter(Boolean).join(' · ');
+  const counts = monthKey(tx) !== monthOf(tx.date) ? `counts in ${formatMonthName(monthKey(tx))}` : null;
+  const meta = [tx.note ? name : null, showDate ? formatDay(tx.date) : null, counts].filter(Boolean).join(' · ');
   return h('button', { type: 'button', class: 'tx-row', onclick: () => transactionDialog(ctx, tx) },
     initialBadge(name),
     h('span', { class: 'tx-main' },
