@@ -3,7 +3,7 @@
 
 import { balance, inRange, monthKey, paidFromPot, rangeSpan, spendByCategory, spendPerDay, totals } from './calc.js';
 import { addDays, dateInMonth, dayOf, dayOfWeek, daysBetween, daysInMonth, formatDay, formatMonth, formatMonthShort, formatShortDate, monthOf, monthRange } from './dates.js';
-import { setAsideIn } from './pots.js';
+import { ratioOf, setAsideIn } from './pots.js';
 
 // Splits a stretch of days into chart buckets: days for up to a month, weeks (Monday to Sunday) for up to
 // about six months, months beyond that. Each bucket: { from, to, label, longLabel, month? }.
@@ -97,6 +97,27 @@ export function incomeUse(state, range) {
   const spent = sums.expense - fromPots;
   const setAside = setAsideIn(state, range).total;
   return { income: sums.income, spent, fromPots, setAside, kept: sums.income - spent - setAside };
+}
+
+// How spending from spending money in a time frame divides into needs and wants (each category marked as
+// one or the other; the rest "unsorted"), against the 50/30/20 ratio's shares of the income that came in.
+export function needsWants(state, range) {
+  const list = inRange(state.transactions, range);
+  const fromPot = paidFromPot(state);
+  const kinds = new Map(state.categories.map((c) => [c.id, c.need === true ? 'needs' : c.need === false ? 'wants' : 'unsorted']));
+  const spent = { needs: 0, wants: 0, unsorted: 0 };
+  for (const t of list) if (t.kind !== 'income' && !fromPot(t)) spent[kinds.get(t.categoryId) ?? 'unsorted'] += t.amount;
+  const use = incomeUse(state, range);
+  const ratio = ratioOf(state);
+  const share = (part) => Math.round((use.income * ratio[part]) / 100);
+  return {
+    income: use.income,
+    ratio,
+    spent,
+    setAside: Math.max(0, use.setAside),
+    target: { needs: share('needs'), wants: share('wants'), savings: share('savings') },
+    sorted: state.categories.some((c) => c.kind === 'expense' && typeof c.need === 'boolean'),
+  };
 }
 
 // Average spending for each day of the week (Monday first) over the days of a stretch that have happened.

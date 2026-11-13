@@ -6,8 +6,9 @@ import { barList } from '../charts.js';
 import { formatDate, formatMonth, formatShortDate, isValidDate, timeframe, timeframeText, todayISO } from '../dates.js';
 import { h, icon } from '../dom.js';
 import { centsToInput, parseAmount } from '../money.js';
-import { incomeMonths, planChecks, plannedFor, setAsideIn, sortedGoals, sourcesOf, tryPay } from '../pots.js';
-import { defaultSplitDialog, markSplitUsed, ruleText, splitWords, toSplitCard } from '../split.js';
+import { needsWants } from '../insights.js';
+import { defaultSplit, incomeMonths, planChecks, plannedFor, ratioOf, setAsideIn, sortedGoals, sourcesOf, tryPay, validSchedule } from '../pots.js';
+import { defaultSplitDialog, markSplitUsed, ratioDialog, ratioText, ruleText, scheduleFields, scheduleText, splitWords, toSplitCard } from '../split.js';
 import { newId } from '../store.js';
 import { card, checkbox, confirmDialog, empty, field, meter, notice, openDialog, pointList, timeframePicker, viewHead } from '../ui.js';
 
@@ -38,7 +39,7 @@ export function renderPlan(ctx) {
       h('div', { class: 'grid-2' }, totalCard(ctx, state, goals, today), defaultsCard(ctx, state)),
       h('div', { class: 'goal-grid' }, goals.map((goal, index) => goalCard(ctx, state, goal, index, goals, today, range, actual))),
       h('div', { class: 'grid-2' }, tryCard(ctx, state, today), plannedCard(ctx, state, goals, range, actual)),
-      checksCard(ctx, state, today)));
+      h('div', { class: 'grid-2' }, checksCard(ctx, state, today), ratioCard(ctx, state, range))));
 }
 
 // How much is set aside in total, and where it sits.
@@ -57,10 +58,14 @@ function defaultsCard(ctx, state) {
     h('span', { class: 'budget-top' }, h('span', { class: 'budget-name' }, label), h('span', { class: 'default-edit' }, icon('edit', 'icon-sm'), 'Edit')),
     h('span', { class: 'default-words' }, words));
   const categories = sortCategories(state.categories.filter((c) => c.kind === 'income' && !c.archived));
-  return card({ title: 'Default split for each kind of income', sub: 'What’s filled in when income comes in. You can still change it every time.', cls: 'card-list' },
+  const ratio = ratioOf(state);
+  return card({ title: 'Default split for each kind of income', sub: 'What’s filled in when income comes in. You can still change it every time. Presets: Save for my goals (each on its schedule) and the 50/30/20 rule.', cls: 'card-list' },
     h('div', { class: 'row-list' },
       row('all', 'All income', splitWords(ctx, state, null)),
-      categories.map((c) => row(c.id, c.name, c.split === 'keep' || (c.split !== null && typeof c.split === 'object') ? splitWords(ctx, state, c.id) : 'Same as all income'))));
+      categories.map((c) => row(c.id, c.name, defaultSplit(state, c.id).inherited ? 'Same as all income' : splitWords(ctx, state, c.id))),
+      h('button', { type: 'button', class: 'row-btn default-row', dataset: { split: 'ratio' }, onclick: () => ratioDialog(ctx) },
+        h('span', { class: 'budget-top' }, h('span', { class: 'budget-name' }, `The ${ratioText(ratio)} rule`), h('span', { class: 'default-edit' }, icon('edit', 'icon-sm'), 'Change')),
+        h('span', { class: 'default-words' }, `${Number(ratio.needs.toFixed(1))}% needs · ${Number(ratio.wants.toFixed(1))}% wants · ${Number(ratio.savings.toFixed(1))}% savings`))));
 }
 
 function goalCard(ctx, state, goal, index, goals, today, range, actual) {
@@ -72,21 +77,26 @@ function goalCard(ctx, state, goal, index, goals, today, range, actual) {
   else note = h('p', { class: 'goal-note' }, `${ctx.money(p.remaining)} to go`);
 
   const sources = sourcesOf(state, goal);
+  const from = (s) => (s.categoryId ? categoryName(state, s.categoryId) : 'all income');
   const sourceText = sources.length
-    ? sources.map((s) => `${ruleText(ctx, s.rule)} ${s.rule.type === 'percent' ? 'of' : 'from'} ${s.categoryId ? categoryName(state, s.categoryId) : 'all income'}`).join(' · ')
+    ? sources.map((s) => {
+      if (s.via === 'rest') return `what’s left of the savings share of ${from(s)}`;
+      if (s.via === 'ratio') return `its schedule, from the savings share of ${from(s)}`;
+      return `${ruleText(ctx, s.rule)} ${s.rule.type === 'percent' ? 'of' : 'from'} ${from(s)}`;
+    }).join(' · ')
     : 'Not in any default split';
-  // With a target date, the monthly amount that gets there on time, offered for the general default.
-  const covered = goal.plan?.type === 'fixed' && goal.plan.value >= p.perMonth;
-  const suggest = p.perMonth && !covered
+  const schedule = scheduleText(ctx, state, goal);
+  // With a target date but no schedule yet, offer one that gets there on time.
+  const suggest = p.perMonth && !validSchedule(goal)
     ? h('p', { class: 'goal-suggest' },
       h('span', {}, `${ctx.money(p.perMonth)} a month gets you to ${ctx.money(goal.target)} by ${formatDate(goal.deadline)}.`),
       h('button', {
         type: 'button',
         class: 'btn btn-sm',
         onclick: () => {
-          ctx.store.save('goals', { ...goal, plan: { type: 'fixed', value: p.perMonth } });
+          ctx.store.save('goals', { ...goal, schedule: { type: 'target', within: null }, plan: { type: 'schedule' } });
           markSplitUsed(ctx);
-          ctx.toast(`${goal.name}: ${ctx.money(p.perMonth)} a month from all income`);
+          ctx.toast(`${goal.name} is on a schedule, and in the split for all income`);
         },
       }, 'Use this'))
     : null;
@@ -114,6 +124,7 @@ function goalCard(ctx, state, goal, index, goals, today, range, actual) {
     p.open ? null : meter(p.ratio),
     note,
     p.saved < 0 ? notice('warn', `More has been paid from ${goal.name} than was in it. The ${ctx.money(-p.saved)} came out of your spending money.`) : null,
+    h('p', { class: 'goal-source' }, h('span', { class: 'goal-source-label' }, 'Schedule: '), schedule ?? 'None'),
     h('p', { class: 'goal-source' }, h('span', { class: 'goal-source-label' }, 'From income: '), sourceText),
     suggest,
     h('p', { class: 'goal-range' }, `${timeframeText(range)}: ${ctx.money(put)} put in${spentFrom ? ` · ${ctx.money(spentFrom)} spent from it` : ''}`),
@@ -222,7 +233,9 @@ function checksCard(ctx, state, today) {
     else if (g.status === 'no-plan') {
       items.push({
         level: by ? 'warn' : 'info',
-        text: `${goal.name} isn’t in any default split${g.needed ? `. It needs about ${ctx.money(g.needed)} a month to reach ${ctx.money(goal.target)} by ${by}` : ''}.`,
+        text: validSchedule(goal)
+          ? `${goal.name} has a schedule, but no default split uses it. Edit a default split and choose "On its schedule", or pick the Save for my goals preset.`
+          : `${goal.name} isn’t in any default split${g.needed ? `. It needs about ${ctx.money(g.needed)} a month to reach ${ctx.money(goal.target)} by ${by}` : ''}.`,
       });
     } else if (g.status === 'on-track') items.push({ level: 'good', text: `${goal.name} is on track: at about ${ctx.money(g.perMonth)} a month it gets there around ${around}, in time for ${by}.` });
     else if (g.status === 'behind') items.push({ level: 'warn', text: `${goal.name} is behind: at about ${ctx.money(g.perMonth)} a month it gets there around ${around}, after ${by}. It needs about ${ctx.money(g.needed)} a month.` });
@@ -237,6 +250,35 @@ function checksCard(ctx, state, today) {
     });
   }
   return card({ title: 'Checks on your plan' }, pointList(items));
+}
+
+// How spending divides into needs and wants against the 50/30/20 rule, for the time frame.
+function ratioCard(ctx, state, range) {
+  const n = needsWants(state, range);
+  const title = `Needs, wants and savings · ${ratioText(n.ratio)}`;
+  if (!n.sorted) {
+    return card({ title, sub: timeframeText(range) },
+      h('p', { class: 'card-text' }, 'Mark each spending category as a need (bills, transport, groceries) or a want (shopping, fun) on the Budgets page, and this compares what you spent on each with the rule.'),
+      h('div', { class: 'btn-row' }, h('a', { class: 'btn', href: '#/budgets' }, 'Sort my categories'), h('button', { type: 'button', class: 'btn', onclick: () => ratioDialog(ctx) }, 'Change the ratio')));
+  }
+  if (!(n.income > 0)) return card({ title, sub: timeframeText(range) }, empty(`No income in ${timeframeText(range)} to compare with.`));
+  const row = (label, spent, target) => {
+    const over = spent > target;
+    return h('div', { class: 'budget-row' },
+      h('span', { class: 'budget-top' }, h('span', { class: 'budget-name' }, label), h('span', { class: `budget-left${over ? ' over' : ''}` }, over ? `${ctx.money(spent - target)} over` : `${ctx.money(target - spent)} left`)),
+      meter(target > 0 ? spent / target : spent > 0 ? 1 : 0, over ? 'over' : 'ok'),
+      h('span', { class: 'budget-sub' }, h('span', {}, `${ctx.money(spent)} of ${ctx.money(target)} (${percent.format(target / n.income)} of income)`)));
+  };
+  return card({ title, sub: `${timeframeText(range)} · ${ctx.money(n.income)} came in` },
+    h('div', { class: 'budget-list' },
+      row('Needs', n.spent.needs, n.target.needs),
+      row('Wants', n.spent.wants, n.target.wants),
+      h('div', { class: 'budget-row' },
+        h('span', { class: 'budget-top' }, h('span', { class: 'budget-name' }, 'Savings'), h('span', { class: `budget-left${n.setAside < n.target.savings ? ' muted' : ''}` }, n.setAside >= n.target.savings ? [icon('check', 'icon-sm'), 'Met'] : `${ctx.money(n.target.savings - n.setAside)} short`)),
+        meter(n.target.savings > 0 ? n.setAside / n.target.savings : n.setAside > 0 ? 1 : 0, 'ok'),
+        h('span', { class: 'budget-sub' }, h('span', {}, `${ctx.money(n.setAside)} set aside of ${ctx.money(n.target.savings)} (${percent.format(n.target.savings / n.income)} of income)`)))),
+    n.spent.unsorted ? h('p', { class: 'card-foot' }, `Plus ${ctx.money(n.spent.unsorted)} in categories not yet marked as a need or a want.`) : null,
+    h('div', { class: 'btn-row' }, h('button', { type: 'button', class: 'btn btn-sm', onclick: () => ratioDialog(ctx) }, 'Change the ratio'), h('a', { class: 'btn btn-sm', href: '#/budgets' }, 'Sort categories')));
 }
 
 // ---------- Dialogs ----------
@@ -302,12 +344,15 @@ function goalDialog(ctx, goal = null) {
     return e.amount > 0 ? 'Put in' : 'Taken out';
   };
   const categories = categoriesFor(state, 'expense', goal?.categoryId);
+  const today = todayISO();
+  const sched = scheduleFields(ctx, goal, today);
   const content = h('div', { class: 'form-grid' },
     field('Name', h('input', { name: 'name', class: 'input', maxLength: 60, autocomplete: 'off', autofocus: !goal, value: goal?.name ?? '', placeholder: 'e.g. Emergency fund' })),
     h('div', { class: 'form-row' },
       field('Target amount', h('input', { name: 'target', class: 'input', inputmode: 'decimal', autocomplete: 'off', placeholder: 'No target', value: goal?.target > 0 ? centsToInput(goal.target, currency) : '' }), 'Optional'),
       field('Target date', h('input', { name: 'deadline', type: 'date', class: 'input', value: goal?.deadline ?? '' }), 'Optional')),
     goal ? null : field('Already set aside', h('input', { name: 'saved', class: 'input', inputmode: 'decimal', autocomplete: 'off', placeholder: 'Optional' })),
+    sched.el,
     field('For spending on', h('select', { name: 'category', class: 'input', value: categories.some((c) => c.id === goal?.categoryId) ? goal.categoryId : '' },
       h('option', { value: '' }, 'Nothing in particular'), categories.map((c) => h('option', { value: c.id }, c.name))),
     'Optional. Expenses in this category are then pre-set to be paid from this set-aside.'),
@@ -342,8 +387,9 @@ function goalDialog(ctx, goal = null) {
       const targetText = String(data.get('target') ?? '').trim();
       const target = targetText ? parseAmount(targetText) : null;
       if (targetText && !target) throw new Error('Enter a target amount greater than zero, or leave it empty.');
-      const deadline = data.get('deadline') || null;
-      if (deadline && !isValidDate(deadline)) throw new Error('Choose a valid target date, or leave it empty.');
+      const picked = data.get('deadline') || null;
+      if (picked && !isValidDate(picked)) throw new Error('Choose a valid target date, or leave it empty.');
+      const { schedule, deadline } = sched.read(data, { target, deadline: picked });
       const savedText = String(data.get('saved') ?? '').trim();
       const saved = savedText ? parseAmount(savedText) : 0;
       if (saved === null) throw new Error('Enter the amount already set aside as a number.');
@@ -352,10 +398,14 @@ function goalDialog(ctx, goal = null) {
       const latest = ctx.store.get();
       const current = goal ? latest.goals.find((g) => g.id === goal.id) ?? goal : null;
       const contributions = current?.contributions ?? (saved ? [{ id: newId(), date: todayISO(), amount: saved, updatedAt: Date.now() }] : []);
-      const record = { ...current, name, target, deadline, categoryId: data.get('category') || null, buffer, contributions };
+      const record = { ...current, name, target, deadline, schedule, categoryId: data.get('category') || null, buffer, contributions };
+      // A new schedule joins the split for all income unless the set-aside already has its own rule there.
+      if (schedule && !current?.plan) record.plan = { type: 'schedule' };
+      if (!schedule && current?.plan?.type === 'schedule') record.plan = null;
       // Only one set-aside can be the safety buffer.
       const others = buffer ? latest.goals.filter((g) => g.buffer && g.id !== goal?.id).map((g) => ({ ...g, buffer: false })) : [];
       ctx.store.saveMany('goals', [record, ...others]);
+      if (schedule) markSplitUsed(ctx);
       ctx.toast(goal ? 'Set-aside saved' : 'Set-aside created');
     },
   });

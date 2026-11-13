@@ -25,7 +25,8 @@ export function demoState(today) {
   // Splitting has been in use since late last month, so the latest pay is waiting to be split.
   state.settings.splitSince = dateInMonth(addMonths(monthOf(today), -1), 20);
   const budgets = { c_food: 450, c_groceries: 450, c_transport: 180, c_housing: 2200, c_utilities: 250, c_shopping: 300, c_health: 150, c_fun: 200 };
-  state.categories = state.categories.map((c) => (budgets[c.id] ? { ...c, monthlyBudget: budgets[c.id] * 100 } : c));
+  const needs = { c_food: false, c_groceries: true, c_transport: true, c_housing: true, c_utilities: true, c_shopping: false, c_health: true, c_fun: false };
+  state.categories = state.categories.map((c) => ({ ...c, monthlyBudget: budgets[c.id] ? budgets[c.id] * 100 : c.monthlyBudget, need: c.id in needs ? needs[c.id] : c.need ?? null }));
 
   const first = addMonths(monthOf(today), -6);
   const start = (day) => dateInMonth(first, day);
@@ -67,7 +68,7 @@ export function demoState(today) {
     },
     {
       id: 'demo-goal-trip', name: 'Trip to Japan', target: 400000, deadline: dateInMonth(addMonths(monthOf(today), 5), 15), updatedAt: 1,
-      plan: { type: 'fixed', value: 25000 },
+      plan: { type: 'schedule' }, schedule: { type: 'target', within: null },
       contributions: monthly('demo-trip', 25000, 27),
     },
     {

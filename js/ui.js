@@ -51,7 +51,7 @@ export function budgetRow(ctx, { category, spent, budget }) {
   const left = budget - spent;
   return h('span', { class: 'budget-row' },
     h('span', { class: 'budget-top' },
-      h('span', { class: 'budget-name' }, category.name),
+      h('span', { class: 'budget-name' }, category.name, typeof category.need === 'boolean' ? h('span', { class: 'badge' }, category.need ? 'Need' : 'Want') : null),
       level === 'over'
         ? h('span', { class: 'budget-left over' }, icon('alert', 'icon-sm'), `${ctx.money(-left)} over`)
         : h('span', { class: 'budget-left' }, `${ctx.money(left)} left`)),

@@ -5,7 +5,7 @@ import { categoryName, inRange, rangeSpan, spendByCategory, sumBy } from '../cal
 import { barList, columnChart, lineChart, segmentBar } from '../charts.js';
 import { dateInMonth, formatDay, formatMonthName, formatShortDate, previousTimeframe, timeframe, timeframeText, todayISO } from '../dates.js';
 import { h } from '../dom.js';
-import { balanceSeries, facts, flowSeries, pace, weekdaySpend } from '../insights.js';
+import { balanceSeries, facts, flowSeries, needsWants, pace, weekdaySpend } from '../insights.js';
 import { formatCompact } from '../money.js';
 import { planChecks } from '../pots.js';
 import { card, empty, notice, pointList, tableToggle, timeframePicker, viewHead } from '../ui.js';
@@ -82,6 +82,16 @@ function insightCard(ctx, state, f, p, range, previous, today) {
   else if (p.runOut) items.push({ level: 'warn', text: `This month: at about ${money(p.perDay)} a day, your spending money runs out around ${formatShortDate(p.runOut)}.` });
   else if (p.perDay > 0) items.push({ level: 'good', text: `This month: at about ${money(p.perDay)} a day, your spending money lasts to the end of ${month}.` });
 
+  const nw = needsWants(state, range);
+  if (nw.sorted && nw.income > 0) {
+    const share = (v) => percent.format(v / nw.income);
+    const overN = nw.spent.needs > nw.target.needs;
+    const overW = nw.spent.wants > nw.target.wants;
+    items.push({
+      level: overN || overW ? 'warn' : 'good',
+      text: `Against your ${nw.ratio.needs}/${nw.ratio.wants}/${nw.ratio.savings} rule: needs took ${share(nw.spent.needs)} of your income, wants ${share(nw.spent.wants)}, and you set aside ${share(nw.setAside)}${overW ? `. Wants went ${money(nw.spent.wants - nw.target.wants)} over their share` : overN ? `. Needs went ${money(nw.spent.needs - nw.target.needs)} over their share` : ''}.`,
+    });
+  }
   const checks = planChecks(state, today);
   if (checks.buffer?.months != null) {
     items.push({

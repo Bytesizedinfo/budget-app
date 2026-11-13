@@ -909,3 +909,21 @@ input[type="date"].input { min-width: 0; }
   .try-form { grid-template-columns: 1fr; }
   .plan-total-value { font-size: 30px; }
 }
+
+/* ---------- Presets, schedules, the 50/30/20 rule ---------- */
+
+.preset-row { display: grid; gap: 6px; }
+.preset-btns { margin-top: 0; align-items: center; }
+.rule-row { grid-template-columns: minmax(0, 1fr) 150px 110px; }
+.rule-note { grid-column: 2 / -1; font-size: 12.5px; color: var(--muted); }
+.ratio-row { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.ratio-box { display: grid; gap: 8px; justify-items: start; }
+.sched-row { display: grid; grid-template-columns: minmax(0, 1.4fr) auto minmax(0, 0.7fr) minmax(0, 1fr); align-items: center; gap: 8px; }
+.sched-row[hidden] { display: none; }
+.field .sched-row + .sched-row { margin-top: 0; }
+.field > .sched-row { margin-top: 2px; }
+.field-hint.bad { color: var(--critical-text); }
+@media (max-width: 599px) {
+  .ratio-row { grid-template-columns: 1fr; }
+  .sched-row { grid-template-columns: minmax(0, 1fr) auto minmax(0, 0.6fr) minmax(0, 1fr); }
+}

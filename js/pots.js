@@ -1,8 +1,9 @@
-// Planning maths for set-asides: the default split for each kind of income, what one income entry should be
-// split into, what a pay amount would leave, and how the plan compares with what was actually set aside.
+// Planning maths for set-asides: saving schedules, the default split for each kind of income (including the
+// 50/30/20 preset), what one income entry should be split into, what a pay amount would leave, and how the
+// plan compares with what was actually set aside.
 
 import { byNewest, monthKey, potBalance, potEntries, spendPerDay, splitOf, trend } from './calc.js';
-import { addDays, addMonths, monthOf, monthRange } from './dates.js';
+import { addDays, addMonths, dateInMonth, dayOf, daysInMonth, isValidDate, monthOf, monthRange } from './dates.js';
 
 // Set-asides in priority order: the order chosen on the Plan page, then the order they were made in.
 export function sortedGoals(state) {
@@ -12,37 +13,131 @@ export function sortedGoals(state) {
     .map((x) => x.goal);
 }
 
-// A rule is { type: 'fixed', value: cents a month } or { type: 'percent', value: percent of the income }.
+// ---------- Saving schedules ----------
+// A set-aside can have a saving schedule (`schedule` on the goal):
+//   { type: 'rate', amount, every, unit, since }  an amount every N days, weeks or months, from `since`
+//   { type: 'target', within? }                   reach the target by the goal's target date; `within`
+//                                                 ({ n, unit }) records that the date was picked as a length of time.
+
+export const UNITS = ['day', 'week', 'month'];
+
+export function validSchedule(goal) {
+  const s = goal?.schedule;
+  if (!s || typeof s !== 'object') return null;
+  if (s.type === 'rate') {
+    const every = Math.max(1, Math.round(Number(s.every) || 1));
+    if (!(s.amount > 0) || !UNITS.includes(s.unit)) return null;
+    return { type: 'rate', amount: s.amount, every, unit: s.unit, since: isValidDate(s.since) ? s.since : null };
+  }
+  if (s.type === 'target' && goal.target > 0 && isValidDate(goal.deadline)) {
+    const within = s.within && s.within.n > 0 && UNITS.includes(s.within.unit) ? { n: Math.round(s.within.n), unit: s.within.unit } : null;
+    return { type: 'target', within };
+  }
+  return null;
+}
+
+// The date a length of time from a day: 3 months from 13 Nov is 13 Feb (or the end of a shorter month).
+export function dateAfter(from, n, unit) {
+  if (unit === 'day') return addDays(from, n);
+  if (unit === 'week') return addDays(from, 7 * n);
+  return dateInMonth(addMonths(monthOf(from), n), dayOf(from));
+}
+
+// What a rate schedule comes to in one month. Daily and weekly amounts count the days of that month (from the
+// day the schedule started, in its first month); "every 3 months" is spread evenly over the months.
+export function rateInMonth(schedule, month) {
+  const { amount, every, unit, since } = schedule;
+  if (since && monthOf(since) > month) return 0;
+  if (unit === 'month') return Math.round(amount / every);
+  const perDay = amount / (unit === 'week' ? 7 * every : every);
+  const first = since && monthOf(since) === month ? dayOf(since) : 1;
+  return Math.round(perDay * (daysInMonth(month) - first + 1));
+}
+
+// What a set-aside's schedule asks for in a month. For a target, that's what was still missing at the start of
+// the month, shared over the months left to its date (all of it once the date has passed), so putting money in
+// during the month doesn't change the month's amount.
+export function scheduleDue(state, goal, month) {
+  const s = validSchedule(goal);
+  if (!s) return 0;
+  if (s.type === 'rate') return rateInMonth(s, month);
+  const before = potEntries(state, goal).filter((e) => e.month < month).reduce((sum, e) => sum + e.amount, 0);
+  const remaining = Math.max(0, goal.target - before);
+  if (!remaining) return 0;
+  const last = monthOf(goal.deadline);
+  return month > last ? remaining : Math.ceil(remaining / monthRange(month, last).length);
+}
+
+// ---------- The 50/30/20 ratio ----------
+// One ratio for the whole budget (settings.ratio): the share of income for needs, wants and savings, and which
+// set-aside gets whatever is left of the savings part once the goals' schedules have had theirs ('keep': none).
+
+export function ratioOf(state) {
+  const r = state.settings.ratio ?? {};
+  const ok = (n) => Number.isFinite(n) && n >= 0 && n <= 100;
+  const parts = ok(r.needs) && ok(r.wants) && ok(r.savings) && Math.abs(r.needs + r.wants + r.savings - 100) < 0.01
+    ? { needs: r.needs, wants: r.wants, savings: r.savings }
+    : { needs: 50, wants: 30, savings: 20 };
+  const goals = sortedGoals(state);
+  let restId = null;
+  if (r.restId !== 'keep') restId = goals.find((g) => g.id === r.restId)?.id ?? (goals.find((g) => g.buffer) ?? goals.find((g) => !(g.target > 0)))?.id ?? null;
+  return { ...parts, restId };
+}
+
+// ---------- Default splits ----------
+
+// A rule is { type: 'fixed', value: cents a month }, { type: 'percent', value: percent of the income } or
+// { type: 'schedule' } (what's due on the set-aside's saving schedule).
 export function validRule(rule) {
-  if (!rule || !(rule.value > 0)) return null;
+  if (!rule) return null;
+  if (rule.type === 'schedule') return { type: 'schedule' };
+  if (!(rule.value > 0)) return null;
   if (rule.type === 'percent') return { type: 'percent', value: Math.min(100, rule.value) };
   return rule.type === 'fixed' ? { type: 'fixed', value: rule.value } : null;
 }
 
-// The default split for one kind of income. An income category can keep everything ('keep'), have its own
-// rules, or follow the general default, which is made of each set-aside's own `plan`.
-// Returns { source: 'general' | 'own' | 'keep', rules: Map(setAsideId -> rule) }.
-export function defaultSplit(state, categoryId) {
-  const own = state.categories.find((c) => c.id === categoryId && c.kind === 'income')?.split;
-  const rules = new Map();
-  if (own === 'keep') return { source: 'keep', rules };
-  const custom = own !== null && typeof own === 'object';
-  for (const goal of state.goals) {
-    const rule = validRule(custom ? own[goal.id] : goal.plan);
-    if (rule) rules.set(goal.id, rule);
-  }
-  return { source: custom ? 'own' : 'general', rules };
+// Every set-aside that has a saving schedule, on its schedule: the "Save for my goals" preset.
+export function scheduleRules(state) {
+  return new Map(state.goals.filter((g) => validSchedule(g)).map((g) => [g.id, { type: 'schedule' }]));
 }
 
-// Where a set-aside's money comes from by default: [{ categoryId (null for all income), rule }].
+// The default split for one kind of income (categoryId null: all income).
+// An income category can keep everything ('keep'), use the 50/30/20 ratio ('ratio'), have its own rules, or
+// follow all income. All income is either the ratio (settings.allIncome === 'ratio') or each set-aside's `plan`.
+// Returns { source: 'general' | 'own' | 'ratio' | 'keep', inherited, rules: Map(setAsideId -> rule), ratio }.
+export function defaultSplit(state, categoryId) {
+  const category = categoryId ? state.categories.find((c) => c.id === categoryId && c.kind === 'income') : null;
+  const own = category?.split;
+  const custom = own !== null && typeof own === 'object';
+  const inherited = !!category && !custom && own !== 'keep' && own !== 'ratio';
+  if (own === 'keep') return { source: 'keep', inherited: false, rules: new Map(), ratio: null };
+  if (own === 'ratio' || ((!category || inherited) && state.settings.allIncome === 'ratio')) {
+    return { source: 'ratio', inherited, rules: scheduleRules(state), ratio: ratioOf(state) };
+  }
+  const rules = new Map();
+  for (const goal of state.goals) {
+    const rule = validRule(custom ? own[goal.id] : goal.plan);
+    // A schedule rule only counts while the set-aside has a schedule.
+    if (rule && (rule.type !== 'schedule' || validSchedule(goal))) rules.set(goal.id, rule);
+  }
+  return { source: custom ? 'own' : 'general', inherited, rules, ratio: null };
+}
+
+// Where a set-aside's money comes from by default: [{ categoryId (null for all income), rule, via }], where via
+// is 'ratio' (its schedule, from the savings part of a 50/30/20 split) or 'rest' (what's left of that part).
 export function sourcesOf(state, goal) {
   const sources = [];
-  const general = validRule(goal.plan);
-  if (general) sources.push({ categoryId: null, rule: general });
+  const add = (categoryId, split) => {
+    if (split.source === 'ratio') {
+      if (split.rules.has(goal.id)) sources.push({ categoryId, rule: { type: 'schedule' }, via: 'ratio' });
+      if (split.ratio.restId === goal.id) sources.push({ categoryId, rule: null, via: 'rest' });
+    } else if (split.rules.has(goal.id)) sources.push({ categoryId, rule: split.rules.get(goal.id), via: null });
+  };
+  add(null, defaultSplit(state, null));
   for (const c of state.categories) {
-    if (c.kind !== 'income' || c.archived || c.split === null || typeof c.split !== 'object') continue;
-    const rule = validRule(c.split[goal.id]);
-    if (rule) sources.push({ categoryId: c.id, rule });
+    if (c.kind !== 'income' || c.archived) continue;
+    const split = defaultSplit(state, c.id);
+    if (!split.inherited && split.source !== 'keep') add(c.id, split);
   }
   return sources;
 }
@@ -57,35 +152,61 @@ export function setAsideInMonth(state, goal, month, exceptId = null) {
   return Math.max(0, sum);
 }
 
-// What the default split asks of one income entry, set-aside by set-aside in priority order.
-//   want: what the default asks for. A fixed amount is per month, so only what's still missing this month
-//         is asked for; nothing is asked beyond a target.
-//   give: what fits once the set-asides above it have taken theirs.
-export function planSplit(state, income) {
+// What a split asks of one income entry, set-aside by set-aside in priority order.
+//   want: what the split asks for. A fixed amount a month, or what's due on a schedule, only asks for what's
+//         still missing this month (alreadyIn); nothing is asked beyond a target.
+//   give: what fits once the set-asides above have taken theirs. With the 50/30/20 ratio, everything comes out
+//         of the savings part, and what's left of it goes to the ratio's chosen set-aside (`rest` on its row).
+function allocate(state, income, split, alreadyIn, own = {}) {
   const month = monthKey(income);
-  const { source, rules } = defaultSplit(state, income.categoryId);
-  const own = splitOf(income) ?? {};
   let left = income.amount;
+  let pool = split.source === 'ratio' ? Math.round((income.amount * split.ratio.savings) / 100) : Infinity;
   const rows = [];
   for (const goal of sortedGoals(state)) {
-    const rule = rules.get(goal.id) ?? null;
+    const rule = split.rules.get(goal.id) ?? null;
     let want = 0;
     let already = 0;
     if (rule?.type === 'percent') want = Math.round((income.amount * rule.value) / 100);
     else if (rule) {
-      already = setAsideInMonth(state, goal, month, income.id);
-      want = Math.max(0, rule.value - already);
+      already = alreadyIn(goal, month);
+      want = Math.max(0, (rule.type === 'schedule' ? scheduleDue(state, goal, month) : rule.value) - already);
     }
     let toTarget = null;
     if (goal.target > 0) {
       toTarget = Math.max(0, goal.target - (potBalance(state, goal) - (own[goal.id] > 0 ? own[goal.id] : 0)));
       want = Math.min(want, toTarget);
     }
-    const give = Math.min(want, left);
+    const give = Math.min(want, left, pool);
     left -= give;
-    rows.push({ goal, rule, want, give, already, toTarget });
+    pool -= give;
+    rows.push({ goal, rule, want, give, already, toTarget, rest: 0 });
   }
-  return { source, rows, setAside: income.amount - left, keep: left, short: rows.reduce((sum, r) => sum + r.want - r.give, 0) };
+  if (split.source === 'ratio' && pool > 0 && left > 0) {
+    const row = rows.find((r) => r.goal.id === split.ratio.restId);
+    if (row) {
+      let extra = Math.min(pool, left);
+      if (row.toTarget !== null) extra = Math.min(extra, Math.max(0, row.toTarget - row.give));
+      row.give += extra;
+      row.want += extra;
+      row.rest = extra;
+      left -= extra;
+    }
+  }
+  return { rows, setAside: income.amount - left, keep: left, short: rows.reduce((sum, r) => sum + r.want - r.give, 0) };
+}
+
+// What a split (the income's default one unless given) asks of one income entry.
+export function planSplit(state, income, split = defaultSplit(state, income.categoryId)) {
+  const own = splitOf(income) ?? {};
+  const result = allocate(state, income, split, (goal, month) => setAsideInMonth(state, goal, month, income.id), own);
+  return { ...result, source: split.source, inherited: split.inherited, ratio: split.ratio };
+}
+
+// The presets offered when splitting: the income's default, each goal on its schedule, and the 50/30/20 ratio.
+export function presetSplit(state, preset, categoryId) {
+  if (preset === 'goals') return { source: 'own', inherited: false, rules: scheduleRules(state), ratio: null };
+  if (preset === 'ratio') return { source: 'ratio', inherited: false, rules: scheduleRules(state), ratio: ratioOf(state) };
+  return defaultSplit(state, categoryId);
 }
 
 export function suggestSplit(state, income) {
@@ -105,27 +226,20 @@ export function tryPay(state, { amount, categoryId }, today) {
 // What today's default splits would set aside from a list of income entries, replayed in date order from a
 // clean slate: { byGoal: Map(setAsideId -> cents), total, income }.
 export function plannedFor(state, transactions) {
-  const goals = sortedGoals(state);
-  const byGoal = new Map(goals.map((g) => [g.id, 0]));
-  const monthly = new Map(); // "setAsideId month" -> planned so far, for fixed amounts a month
+  const byGoal = new Map(sortedGoals(state).map((g) => [g.id, 0]));
+  const monthly = new Map(); // "setAsideId month" -> planned so far, for amounts a month and schedules
   let total = 0;
   let income = 0;
   const incomes = transactions.filter((t) => t.kind === 'income' && typeof t.date === 'string').sort((a, b) => a.date.localeCompare(b.date));
   for (const t of incomes) {
     income += t.amount;
-    const { rules } = defaultSplit(state, t.categoryId);
-    let left = t.amount;
-    for (const goal of goals) {
-      const rule = rules.get(goal.id);
-      if (!rule) continue;
-      const key = `${goal.id} ${monthKey(t)}`;
-      const sofar = monthly.get(key) ?? 0;
-      const want = rule.type === 'percent' ? Math.round((t.amount * rule.value) / 100) : Math.max(0, rule.value - sofar);
-      const give = Math.min(want, left);
-      left -= give;
-      monthly.set(key, sofar + give);
-      byGoal.set(goal.id, byGoal.get(goal.id) + give);
-      total += give;
+    const result = allocate(state, t, defaultSplit(state, t.categoryId), (goal, month) => monthly.get(`${goal.id} ${month}`) ?? 0);
+    for (const row of result.rows) {
+      if (!row.give) continue;
+      const key = `${row.goal.id} ${monthKey(t)}`;
+      monthly.set(key, (monthly.get(key) ?? 0) + row.give);
+      byGoal.set(row.goal.id, byGoal.get(row.goal.id) + row.give);
+      total += row.give;
     }
   }
   return { byGoal, total, income };

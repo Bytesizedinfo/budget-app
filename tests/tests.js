@@ -1,10 +1,10 @@
 import { balance, budgetSummary, goalProgress, inMonth, inRange, monthKey, potBalance, potEntries, rangeMonths, safeToSpend, spendPerDay, splitTotal, totals, trend } from '../js/calc.js';
 import { addMonths, dateInMonth, daysInMonth, isValidDate, monthRange, monthsCovered, previousTimeframe, timeframe } from '../js/dates.js';
-import { balanceSeries, facts, flowSeries, incomeUse, pace, timeBuckets, weekdaySpend } from '../js/insights.js';
+import { balanceSeries, facts, flowSeries, incomeUse, needsWants, pace, timeBuckets, weekdaySpend } from '../js/insights.js';
 import { importSpendSave } from '../js/import-spendsave.js';
 import { mergeStates } from '../js/merge.js';
 import { centsToInput, formatMoney, parseAmount } from '../js/money.js';
-import { bufferCheck, defaultSplit, planChecks, planSplit, plannedFor, setAsideIn, setAsideInMonth, sortedGoals, sourcesOf, suggestSplit, toSplit, tryPay } from '../js/pots.js';
+import { bufferCheck, dateAfter, defaultSplit, planChecks, planSplit, plannedFor, presetSplit, rateInMonth, ratioOf, scheduleDue, setAsideIn, setAsideInMonth, sortedGoals, sourcesOf, suggestSplit, toSplit, tryPay, validSchedule } from '../js/pots.js';
 import { dueOccurrences, nextDate, occurrenceId, occurrenceIn, occurrencesBetween } from '../js/recurring.js';
 import { createStore, emptyState, parseState, seedState, serialize } from '../js/store.js';
 import { createSync, decodeBase64, encodeBase64 } from '../js/sync.js';
@@ -946,6 +946,88 @@ test('insight facts: top category, biggest expense, daily average and no-spend d
   assert.equal(f.biggest.id, 'b');
   assert.deepEqual([f.daysElapsed, f.avgPerDay, f.noSpendDays], [12, Math.round(14000 / 12), 10]);
   assert.equal(f.previousExpense, 4000);
+});
+
+
+// ---------- saving schedules, presets, the 50/30/20 rule ----------
+
+test('saving schedules: an amount every N days/weeks/months, and reaching a target by a date', () => {
+  const state = potState();
+  const [save, trip, pods] = state.goals;
+  save.schedule = { type: 'rate', amount: 4000, every: 2, unit: 'week', since: '2026-11-10' };
+  trip.schedule = { type: 'rate', amount: 30000, every: 3, unit: 'month' };
+  pods.schedule = { type: 'target', within: { n: 3, unit: 'month' } }; // target 349 by 2027-02-28
+  assert.equal(rateInMonth(validSchedule(save), '2026-11'), Math.round((4000 / 14) * 21), 'daily rate over the days from 10 Nov');
+  assert.equal(rateInMonth(validSchedule(save), '2026-12'), Math.round((4000 / 14) * 31));
+  assert.equal(rateInMonth(validSchedule(save), '2026-10'), 0, 'not before it started');
+  assert.equal(scheduleDue(state, trip, '2026-12'), 10000, 'every 3 months is spread over the months');
+  assert.equal(scheduleDue(state, pods, '2026-11'), Math.ceil(34900 / 4), 'what is left, over the months to the date');
+  state.transactions.push(tx('p', '2026-11-20', 10000, { kind: 'income', split: { pods: 10000 } }));
+  assert.equal(scheduleDue(state, pods, '2026-11'), Math.ceil(34900 / 4), 'money put in this month does not change this month’s amount');
+  assert.equal(scheduleDue(state, pods, '2026-12'), Math.ceil(24900 / 3));
+  assert.equal(scheduleDue(state, pods, '2027-04'), 24900, 'all of it once the date has passed');
+  assert.equal(validSchedule({ schedule: { type: 'target' }, target: 100, deadline: null }), null, 'a target schedule needs a date');
+  assert.equal(validSchedule({ schedule: { type: 'rate', amount: 0, every: 1, unit: 'week' } }), null);
+  assert.deepEqual([dateAfter('2026-11-13', 3, 'month'), dateAfter('2026-11-30', 3, 'month'), dateAfter('2026-11-13', 2, 'week'), dateAfter('2026-11-13', 10, 'day')], ['2027-02-13', '2027-02-28', '2026-11-27', '2026-11-23']);
+});
+
+test('the Save for my goals preset puts each set-aside on its schedule', () => {
+  const state = potState();
+  const [save, trip, pods] = state.goals;
+  save.schedule = { type: 'rate', amount: 10000, every: 1, unit: 'month' };
+  pods.schedule = { type: 'target', within: null };
+  save.plan = { type: 'schedule' };
+  trip.plan = { type: 'fixed', value: 5000 };
+  // In November the pay already split 200 into "save", so its 100-a-month schedule asks for nothing more.
+  const nov = tx('p', '2026-11-13', 50000, { kind: 'income', categoryId: 'c_salary' });
+  assert.deepEqual(planSplit(state, nov, presetSplit(state, 'goals', 'c_salary')).rows.map((r) => [r.goal.id, r.give]), [['save', 0], ['trip', 0], ['pods', Math.ceil(34900 / 4)]]);
+  const pay = tx('p', '2026-12-01', 50000, { kind: 'income', categoryId: 'c_salary' });
+  const goals = planSplit(state, pay, presetSplit(state, 'goals', 'c_salary'));
+  assert.deepEqual(goals.rows.map((r) => [r.goal.id, r.give]), [['save', 10000], ['trip', 0], ['pods', Math.ceil(34900 / 3)]]);
+  assert.deepEqual(suggestSplit(state, pay), { save: 10000, trip: 5000 }, 'the default: a schedule rule and a fixed amount');
+  assert.deepEqual([...defaultSplit(state, 'c_salary').rules.keys()], ['save', 'trip']);
+  delete save.schedule;
+  assert.deepEqual([...defaultSplit(state, 'c_salary').rules.keys()], ['trip'], 'a schedule rule needs a schedule');
+});
+
+test('the 50/30/20 rule: the savings share goes to goals on their schedules, then to one set-aside', () => {
+  const state = potState();
+  const [save, trip, pods] = state.goals;
+  pods.schedule = { type: 'target', within: null }; // 8725 a month
+  state.settings.allIncome = 'ratio';
+  const pay = tx('p', '2026-11-13', 100000, { kind: 'income', categoryId: 'c_salary' });
+  assert.deepEqual(ratioOf(state), { needs: 50, wants: 30, savings: 20, restId: 'save' }, 'the rest goes to the first pot without a target');
+  let plan = planSplit(state, pay);
+  assert.equal(plan.source, 'ratio');
+  assert.deepEqual(plan.rows.map((r) => [r.goal.id, r.give, r.rest]), [['save', 20000 - 8725, 20000 - 8725], ['trip', 0, 0], ['pods', 8725, 0]]);
+  assert.deepEqual([plan.setAside, plan.keep], [20000, 80000]);
+  state.settings.ratio = { needs: 60, wants: 25, savings: 15, restId: 'trip' };
+  plan = planSplit(state, pay);
+  assert.deepEqual(plan.rows.map((r) => [r.goal.id, r.give]), [['save', 0], ['trip', 15000 - 8725], ['pods', 8725]]);
+  state.settings.ratio = { needs: 90, wants: 5, savings: 5, restId: 'keep' };
+  plan = planSplit(state, pay);
+  assert.deepEqual([plan.setAside, plan.keep, plan.short], [5000, 95000, 8725 - 5000], 'the savings share caps the goals');
+  state.settings.ratio = { needs: 50, wants: 60, savings: 20 };
+  assert.deepEqual(ratioOf(state).needs, 50, 'shares that do not add up fall back to 50/30/20');
+  // One kind of income can use the rule while all income has its own split, and the other way round.
+  state.settings.allIncome = null;
+  save.plan = { type: 'percent', value: 10 };
+  state.categories = state.categories.map((c) => (c.id === 'c_other_income' ? { ...c, split: 'ratio' } : c));
+  assert.equal(defaultSplit(state, 'c_salary').source, 'general');
+  assert.equal(defaultSplit(state, 'c_other_income').source, 'ratio');
+  assert.deepEqual(sourcesOf(state, pods).map((s) => [s.categoryId, s.via]), [['c_other_income', 'ratio']]);
+  assert.deepEqual(sourcesOf(state, save).map((s) => [s.categoryId, s.via]), [[null, null], ['c_other_income', 'rest']]);
+});
+
+test('needs and wants against the rule, from categories marked as one or the other', () => {
+  const state = potState();
+  state.categories = state.categories.map((c) => (c.id === 'c_food' ? { ...c, need: false } : c.id === 'c_transport' ? { ...c, need: true } : c));
+  state.transactions.push(tx('bus', '2026-11-08', 2500, { categoryId: 'c_transport' }), tx('misc', '2026-11-09', 1000, { categoryId: 'c_other' }));
+  const n = needsWants(state, timeframe('month', '2026-11-12'));
+  assert.deepEqual(n.spent, { needs: 2500, wants: 4000, unsorted: 1000 }, 'the ticket paid from a set-aside is left out');
+  assert.deepEqual(n.target, { needs: 50000, wants: 30000, savings: 20000 });
+  assert.deepEqual([n.setAside, n.sorted], [30000, true]);
+  assert.equal(needsWants(seedState('SGD'), timeframe('month', '2026-11-12')).sorted, false);
 });
 
 // ---------- runner ----------

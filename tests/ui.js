@@ -373,7 +373,7 @@ step('a kind of income can have its own default split', async () => {
   dialog.querySelector('[name="type-demo-goal-emergency"]').dispatchEvent(new Event('change'));
   submit(dialog);
   await dialogClosed();
-  await until(() => /5% to Gifts/.test($('[data-split="c_salary"]').textContent) && !/Emergency/.test($('[data-split="c_salary"]').textContent), () => `the salary row (${$('[data-split="c_salary"]').textContent})`);
+  await until(() => /Gifts 5%/.test($('[data-split="c_salary"]').textContent) && !/Emergency/.test($('[data-split="c_salary"]').textContent), () => `the salary row (${$('[data-split="c_salary"]').textContent})`);
   expect(/Same as all income/.test($('[data-split="c_other_income"]').textContent), 'other kinds still follow all income');
   expect(goalCard('Gifts').textContent.includes('5% of Salary'), 'the set-aside says where its money comes from');
 });
@@ -464,6 +464,75 @@ step('every money page has the time frame, and Budgets scale to it', async () =>
   await until(() => /Already added:/.test($('.range-card')?.textContent ?? ''), 'what recurring items added in the range');
   pick('month');
   await until(() => $('#timeframe').value === 'month', 'back to this month');
+});
+
+
+step('presets fill the split box: save for my goals, and the 50/30/20 rule', async () => {
+  await go('dashboard');
+  const card = await until(() => $('.to-split'), 'the to-split card');
+  button('Split', card).click();
+  const dialog = await openDialog();
+  const amount = (id) => dialog.querySelector(`[name="amt-${id}"]`).value;
+  dialog.querySelector('[data-preset="goals"]').click();
+  await until(() => amount('demo-goal-trip') !== '' && amount('demo-goal-emergency') === '', () => `goals preset (trip ${amount('demo-goal-trip')}, fund ${amount('demo-goal-emergency')})`);
+  dialog.querySelector('[data-preset="ratio"]').click();
+  await until(() => /50\/30\/20/.test(dialog.textContent) && amount('demo-goal-emergency') !== '', 'the ratio preset fills the rest into the emergency fund');
+  button('Cancel', dialog).click();
+  await dialogClosed();
+});
+
+step('a set-aside gets a saving schedule, which shows on its card and in the default split', async () => {
+  await go('plan');
+  goalCard('Gifts').querySelector('[aria-label="Edit Gifts"]').click();
+  let dialog = await openDialog();
+  const sched = dialog.querySelector('[name="sched"]');
+  sched.value = 'rate';
+  sched.dispatchEvent(new Event('change'));
+  fill(dialog, 'sched-amount', '15');
+  fill(dialog, 'sched-every', '2');
+  dialog.querySelector('[name="sched-unit"]').value = 'week';
+  submit(dialog);
+  await dialogClosed();
+  await until(() => /15\.00 every 2 weeks/.test(goalCard('Gifts')?.textContent ?? ''), () => `the schedule on the card (${goalCard('Gifts')?.textContent.slice(0, 200)})`);
+  expect(/on its schedule/.test(goalCard('Gifts').textContent), 'it joined the split for all income');
+  // "Reach the target within…" sets the target date.
+  goalCard('Trip to Japan').querySelector('[aria-label="Edit Trip to Japan"]').click();
+  dialog = await openDialog();
+  dialog.querySelector('[name="sched"]').value = 'within';
+  dialog.querySelector('[name="sched"]').dispatchEvent(new Event('change'));
+  fill(dialog, 'sched-every', '6');
+  dialog.querySelector('[name="sched-unit"]').value = 'month';
+  submit(dialog);
+  await dialogClosed();
+  await until(() => /\(6 months\)/.test(goalCard('Trip to Japan')?.textContent ?? ''), 'the trip is on a 6-month schedule');
+});
+
+step('the 50/30/20 ratio can be changed and used as the default for all income', async () => {
+  $('[data-split="ratio"]').click();
+  let dialog = await openDialog();
+  fill(dialog, 'needs', '60');
+  fill(dialog, 'wants', '25');
+  fill(dialog, 'savings', '15');
+  submit(dialog);
+  await dialogClosed();
+  await until(() => /The 60\/25\/15 rule/.test($('[data-split="ratio"]').textContent), 'the new ratio');
+  $('[data-split="all"]').click();
+  dialog = await openDialog();
+  dialog.querySelectorAll('.segmented input')[1].click(); // 50/30/20 rule
+  submit(dialog);
+  await dialogClosed();
+  await until(() => /60\/25\/15: 15% to savings/.test($('[data-split="all"]').textContent), () => `all income uses the rule (${$('[data-split="all"]').textContent})`);
+  expect($$('.card').some((c) => c.querySelector('.card-title')?.textContent.startsWith('Needs, wants and savings') && /Needs/.test(c.textContent) && /Wants/.test(c.textContent)), 'the needs/wants card compares spending with the rule');
+});
+
+step('a spending category can be marked as a need or a want', async () => {
+  await go('budgets');
+  $$('.row-btn').find((row) => row.textContent.includes('Other')).click();
+  const dialog = await openDialog();
+  dialog.querySelector('[name="need"]').value = 'want';
+  submit(dialog);
+  await dialogClosed();
+  await until(() => $$('.row-btn').some((row) => row.textContent.includes('Other') && row.textContent.includes('Want')), 'the want tag');
 });
 
 step('the phone bar has Plan and Insights, with Budgets and Reports under More', async () => {

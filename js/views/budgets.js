@@ -42,7 +42,7 @@ export function renderBudgets(ctx) {
             ? budgetRow(ctx, row)
             : h('span', { class: 'budget-row' },
               h('span', { class: 'budget-top' },
-                h('span', { class: 'budget-name' }, row.category.name, row.category.archived ? h('span', { class: 'badge' }, 'Archived') : null),
+                h('span', { class: 'budget-name' }, row.category.name, row.category.archived ? h('span', { class: 'badge' }, 'Archived') : null, needTag(row.category)),
                 h('span', { class: 'budget-left muted' }, `${ctx.money(row.spent)} spent`)),
               h('span', { class: 'budget-sub' }, 'No budget')))))),
       card({ title: 'Income categories', sub: timeframeText(range), cls: 'card-list' },
@@ -58,6 +58,8 @@ export function renderBudgets(ctx) {
             h('span', { class: 'budget-top' }, h('span', { class: 'budget-name' }, c.name), h('span', { class: 'budget-left muted' }, c.kind === 'income' ? 'Income' : 'Spending'))))))
         : null));
 }
+
+const needTag = (c) => (typeof c.need === 'boolean' ? h('span', { class: 'badge' }, c.need ? 'Need' : 'Want') : null);
 
 // One overall limit for everything spent in a month, bills included. Always about this month.
 function limitCard(ctx, month) {
@@ -125,14 +127,21 @@ export function categoryDialog(ctx, category = null) {
     h('input', { name: 'budget', class: 'input', inputmode: 'decimal', autocomplete: 'off', placeholder: 'No budget', value: category?.monthlyBudget != null ? centsToInput(category.monthlyBudget, currency) : '' }),
     'Leave empty for no limit.');
   budgetField.hidden = kind !== 'expense';
+  const needField = field('For the 50/30/20 rule, this is',
+    h('select', { name: 'need', class: 'input', value: category?.need === true ? 'need' : category?.need === false ? 'want' : '' },
+      h('option', { value: '' }, 'Not sorted yet'), h('option', { value: 'need' }, 'A need (bills, transport, groceries)'), h('option', { value: 'want' }, 'A want (shopping, fun)')),
+    'The Plan page compares what you spend on needs and wants with the rule.');
+  needField.hidden = kind !== 'expense';
 
   const content = h('div', { class: 'form-grid' },
     category ? null : segmented('kind', [['expense', 'Spending'], ['income', 'Income']], kind, (value) => {
       kind = value;
       budgetField.hidden = kind !== 'expense';
+      needField.hidden = kind !== 'expense';
     }),
     field('Name', h('input', { name: 'name', class: 'input', maxLength: 40, value: category?.name ?? '', autofocus: !category, autocomplete: 'off' })),
     budgetField,
+    needField,
     category ? checkbox('archived', 'Archive this category (hide it when adding transactions)', category.archived) : null);
 
   const dialog = openDialog({
@@ -151,7 +160,8 @@ export function categoryDialog(ctx, category = null) {
         monthlyBudget = parseAmount(budgetText);
         if (monthlyBudget === null) throw new Error('Enter the budget as a number, like 450 or 450.00.');
       }
-      ctx.store.save('categories', { ...category, name, kind, monthlyBudget, archived });
+      const need = kind !== 'expense' || !data.get('need') ? null : data.get('need') === 'need';
+      ctx.store.save('categories', { ...category, name, kind, monthlyBudget, archived, need });
       ctx.toast(category ? 'Category saved' : 'Category added');
     },
   });
