@@ -22,6 +22,8 @@ export function demoState(today) {
   const pick = (list) => list[Math.floor(random() * list.length)];
 
   state.settings.spendingLimit = 420000;
+  // Splitting has been in use since late last month, so the latest pay is waiting to be split.
+  state.settings.splitSince = dateInMonth(addMonths(monthOf(today), -1), 20);
   const budgets = { c_food: 450, c_groceries: 450, c_transport: 180, c_housing: 2200, c_utilities: 250, c_shopping: 300, c_health: 150, c_fun: 200 };
   state.categories = state.categories.map((c) => (budgets[c.id] ? { ...c, monthlyBudget: budgets[c.id] * 100 } : c));
 
@@ -60,12 +62,20 @@ export function demoState(today) {
   state.goals = [
     {
       id: 'demo-goal-emergency', name: 'Emergency fund', target: 1500000, deadline: null, updatedAt: 1,
+      plan: { type: 'percent', value: 10 }, buffer: true,
       contributions: [{ id: 'demo-ef-start', date: start(1), amount: 450000, updatedAt: 1 }, ...monthly('demo-ef', 50000, 26)],
     },
     {
       id: 'demo-goal-trip', name: 'Trip to Japan', target: 400000, deadline: dateInMonth(addMonths(monthOf(today), 5), 15), updatedAt: 1,
+      plan: { type: 'fixed', value: 25000 },
       contributions: monthly('demo-trip', 25000, 27),
     },
+    {
+      id: 'demo-goal-gifts', name: 'Gifts', target: null, deadline: null, updatedAt: 1, categoryId: 'c_shopping',
+      contributions: monthly('demo-gifts', 6000, 27),
+    },
   ];
+  // Presents are paid from the Gifts set-aside rather than from spending money.
+  state.transactions = state.transactions.map((t) => (t.note === 'Gift for Sam' && t.amount <= 6000 ? { ...t, potId: 'demo-goal-gifts' } : t));
   return state;
 }

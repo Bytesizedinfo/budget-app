@@ -3,8 +3,9 @@ import { card, viewHead } from '../ui.js';
 
 // The phone layout's "More" tab: the pages that don't fit in the bottom bar.
 const LINKS = [
-  ['goals', 'Savings goals', 'target'],
+  ['budgets', 'Budgets', 'budget'],
   ['recurring', 'Recurring', 'repeat'],
+  ['reports', 'Reports', 'chart'],
   ['settings', 'Settings', 'settings'],
 ];
 

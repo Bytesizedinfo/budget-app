@@ -94,7 +94,7 @@ async function openDataFile(ctx, file) {
   }
   const ok = await confirmDialog({
     title: 'Restore this backup?',
-    message: `This replaces your whole budget with the backup (${next.transactions.length} transactions, ${next.goals.length} goals). The current version stays in your GitHub history.`,
+    message: `This replaces your whole budget with the backup (${next.transactions.length} transactions, ${next.goals.length} set-asides). The current version stays in your GitHub history.`,
     confirm: 'Replace my data',
   });
   if (ok) {
@@ -112,7 +112,7 @@ async function importFromSpendSave(ctx, raw) {
       ? `${added} new ${added === 1 ? 'transaction' : 'transactions'} (out of ${summary.income + summary.expenses} in the file).`
       : `All ${summary.income + summary.expenses} transactions in this file are already here.`,
     summary.countsIn ? `${summary.countsIn} ${summary.countsIn === 1 ? 'pay' : 'pays'} logged for the next month will count in that month.` : '',
-    summary.goals.length ? `Savings: ${summary.goals.join(', ')}.` : '',
+    summary.goals.length ? `Set-asides: ${summary.goals.join(', ')}.` : '',
     summary.recurring.length ? `New monthly recurring items: ${summary.recurring.join(', ')}.` : '',
     summary.spendingLimit ? `Monthly spending limit: ${ctx.money(summary.spendingLimit)}.` : '',
     summary.unsupportedRecurring.length ? `Not repeating monthly, so not added: ${summary.unsupportedRecurring.join(', ')}.` : '',

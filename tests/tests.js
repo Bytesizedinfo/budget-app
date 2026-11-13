@@ -1,9 +1,11 @@
-import { balance, budgetSummary, goalProgress, inMonth, inRange, monthKey, safeToSpend, spendPerDay, totals, trend } from '../js/calc.js';
-import { addMonths, dateInMonth, daysInMonth, isValidDate, monthRange, previousTimeframe, timeframe } from '../js/dates.js';
+import { balance, budgetSummary, goalProgress, inMonth, inRange, monthKey, potBalance, potEntries, rangeMonths, safeToSpend, spendPerDay, splitTotal, totals, trend } from '../js/calc.js';
+import { addMonths, dateInMonth, daysInMonth, isValidDate, monthRange, monthsCovered, previousTimeframe, timeframe } from '../js/dates.js';
+import { balanceSeries, facts, flowSeries, incomeUse, pace, timeBuckets, weekdaySpend } from '../js/insights.js';
 import { importSpendSave } from '../js/import-spendsave.js';
 import { mergeStates } from '../js/merge.js';
 import { centsToInput, formatMoney, parseAmount } from '../js/money.js';
-import { dueOccurrences, nextDate, occurrenceId, occurrenceIn } from '../js/recurring.js';
+import { bufferCheck, defaultSplit, planChecks, planSplit, plannedFor, setAsideIn, setAsideInMonth, sortedGoals, sourcesOf, suggestSplit, toSplit, tryPay } from '../js/pots.js';
+import { dueOccurrences, nextDate, occurrenceId, occurrenceIn, occurrencesBetween } from '../js/recurring.js';
 import { createStore, emptyState, parseState, seedState, serialize } from '../js/store.js';
 import { createSync, decodeBase64, encodeBase64 } from '../js/sync.js';
 import { fakeGitHub } from './fake-github.js';
@@ -35,6 +37,8 @@ const assert = {
 };
 
 const tx = (id, date, amount, extra = {}) => ({ id, date, amount, kind: 'expense', categoryId: 'c_food', note: '', updatedAt: 1, ...extra });
+// A set-aside's progress when nothing but its own contributions is involved.
+const progress = (goal, today) => goalProgress(emptyState(), goal, today);
 
 // ---------- money ----------
 
@@ -140,12 +144,12 @@ test('trend covers twelve months ending at the chosen month', () => {
 
 test('goalProgress works out the monthly amount needed', () => {
   const goal = { target: 120000, deadline: '2027-04-30', contributions: [{ id: 'x', amount: 20000 }] };
-  const p = goalProgress(goal, '2026-11-12');
+  const p = progress(goal, '2026-11-12');
   assert.equal(p.saved, 20000);
   assert.equal(p.remaining, 100000);
   assert.equal(p.perMonth, Math.ceil(100000 / 6));
-  assert.ok(goalProgress({ ...goal, deadline: '2026-10-01' }, '2026-11-12').overdue);
-  assert.ok(goalProgress({ ...goal, contributions: [{ id: 'y', amount: 130000 }] }, '2026-11-12').done);
+  assert.ok(progress({ ...goal, deadline: '2026-10-01' }, '2026-11-12').overdue);
+  assert.ok(progress({ ...goal, contributions: [{ id: 'y', amount: 130000 }] }, '2026-11-12').done);
 });
 
 // ---------- recurring ----------
@@ -313,7 +317,7 @@ test('merge: goal contributions from both devices are combined', () => {
 });
 
 test('goals without a target are open-ended pots', () => {
-  const p = goalProgress({ target: null, contributions: [{ id: 'a', amount: 5000 }, { id: 'b', amount: -1000 }] }, '2026-11-12');
+  const p = progress({ target: null, contributions: [{ id: 'a', amount: 5000 }, { id: 'b', amount: -1000 }] }, '2026-11-12');
   assert.ok(p.open);
   assert.equal(p.saved, 4000);
   assert.ok(!p.done);
@@ -381,10 +385,10 @@ test('import: savings pots become goals with their history', () => {
   const holiday = state.goals.find((g) => g.name === 'Holiday');
   const laptop = state.goals.find((g) => g.name === 'New laptop');
   assert.equal(holiday.target, null);
-  assert.equal(goalProgress(holiday, '2026-11-12').saved, 5000 + 15000 - 6000);
+  assert.equal(progress(holiday, '2026-11-12').saved, 5000 + 15000 - 6000);
   assert.equal(laptop.target, 120000);
   assert.equal(laptop.deadline, '2027-06-30');
-  assert.equal(goalProgress(laptop, '2026-11-12').saved, 10000);
+  assert.equal(progress(laptop, '2026-11-12').saved, 10000);
   assert.deepEqual(summary.emptyPots, ['Rainy day']);
 });
 
@@ -405,7 +409,7 @@ test('import: running it again adds nothing and keeps later edits and deletions'
   assert.deepEqual([again.transactions.length, again.categories.length, again.goals.length], counts);
   assert.equal(again.transactions.find((t) => t.id === 'ss-b1').note, 'Lunch with Sam');
   assert.ok(!again.transactions.some((t) => t.id === 'ss-b3'));
-  assert.equal(goalProgress(again.goals.find((g) => g.name === 'Holiday'), '2026-11-12').saved, 14000);
+  assert.equal(progress(again.goals.find((g) => g.name === 'Holiday'), '2026-11-12').saved, 14000);
 });
 
 test('import: monthly bills become recurring items from their next due date', () => {
@@ -435,7 +439,7 @@ test('import: moves shift money between pots, without double-counting linked one
     { id: 'm3', t: 'transfer', amt: 5, d: '2026-09-12' },
   );
   const { state, summary } = importSpendSave(backup, seedState('SGD'));
-  const saved = (name) => goalProgress(state.goals.find((g) => g.name === name), '2026-11-12').saved;
+  const saved = (name) => progress(state.goals.find((g) => g.name === name), '2026-11-12').saved;
   assert.equal(saved('Holiday'), 14000 - 2500);
   assert.equal(saved('New laptop'), 10000 + 2500);
   assert.equal(state.transactions.length, 6, 'moves are not income or spending');
@@ -459,7 +463,7 @@ test('import: an existing goal with the same name is reused, not duplicated', ()
   state.goals = [{ id: 'mine', name: 'holiday', target: 300000, deadline: null, updatedAt: 99, contributions: [{ id: 'x', date: '2026-07-01', amount: 2000, updatedAt: 99 }] }];
   const goal = importSpendSave(spendSaveBackup(), state).state.goals.find((g) => g.id === 'mine');
   assert.equal(goal.target, 300000, 'keeps its own target');
-  assert.equal(goalProgress(goal, '2026-11-12').saved, 2000 + 14000);
+  assert.equal(progress(goal, '2026-11-12').saved, 2000 + 14000);
 });
 
 // ---------- sync (against a fake GitHub) ----------
@@ -685,6 +689,263 @@ test('import: pay meant for the next month counts there, and an earlier import g
   assert.equal(fixed.summary.countsIn, 1);
   const edited = { ...old, transactions: old.transactions.map((t) => (t.id === 'ss-a1' ? { ...t, amount: 99, updatedAt: Date.now() } : t)) };
   assert.equal(importSpendSave(backup, edited).state.transactions.find((t) => t.id === 'ss-a1').month, undefined, 'an edited entry is left alone');
+});
+
+
+// ---------- set-asides, default splits, planning and insights ----------
+
+const pot = (id, extra = {}) => ({ id, name: id, target: null, deadline: null, updatedAt: 1, contributions: [], ...extra });
+const potState = () => {
+  const state = seedState('SGD');
+  state.goals = [pot('save', { contributions: [{ id: 'c1', date: '2026-10-01', amount: 30000 }] }), pot('trip'), pot('pods', { target: 34900, deadline: '2027-02-28' })];
+  state.transactions = [
+    tx('pay', '2026-11-01', 100000, { kind: 'income', categoryId: 'c_salary', split: { save: 20000, trip: 10000 } }),
+    tx('food', '2026-11-05', 4000),
+    tx('ticket', '2026-11-06', 6000, { potId: 'trip' }),
+  ];
+  return state;
+};
+
+test('set-aside balances: money added by hand, income splits and expenses paid from it', () => {
+  const state = potState();
+  const [save, trip] = state.goals;
+  assert.equal(potBalance(state, save), 50000);
+  assert.equal(potBalance(state, trip), 4000);
+  assert.equal(potBalance(state, save, '2026-10-31'), 30000, 'before the pay arrived');
+  assert.deepEqual(potEntries(state, trip).map((e) => [e.kind, e.amount]), [['split', 10000], ['paid', -6000]]);
+  // total = 100000 - 4000 - 6000; set aside = 50000 + 4000.
+  assert.deepEqual(balance(state, '2026-11-12'), { total: 90000, savings: 54000, spending: 36000 });
+  assert.equal(goalProgress(state, save, '2026-11-12').saved, 50000);
+  assert.equal(splitTotal(state, state.transactions[0]), 30000);
+});
+
+test('set-asides: paying from one leaves spending money and the limit alone; an overdrawn one counts as empty', () => {
+  const state = potState();
+  const before = balance(state, '2026-11-12').spending;
+  state.transactions.push(tx('more', '2026-11-12', 3000, { potId: 'trip' }));
+  assert.equal(balance(state, '2026-11-12').spending, before, 'paid from the set-aside');
+  assert.equal(spendPerDay(state, '2026-11-12').spentToday, 0, 'not counted as today’s spending');
+  state.settings.spendingLimit = 50000;
+  const safe = safeToSpend(state, '2026-11', '2026-11-12');
+  assert.equal(safe.spent, 4000);
+  assert.equal(safe.fromPots, 9000);
+  state.transactions.push(tx('over', '2026-11-12', 5000, { potId: 'trip' })); // 4000 - 3000 - 5000 = -4000
+  assert.equal(potBalance(state, state.goals[1]), -4000);
+  assert.equal(balance(state, '2026-11-12').savings, 50000, 'the overdrawn set-aside adds nothing');
+  // Deleting a set-aside puts its money back into spending money, and its expenses count as ordinary spending.
+  state.goals = state.goals.filter((g) => g.id !== 'trip');
+  assert.equal(splitTotal(state, state.transactions[0]), 20000);
+  assert.equal(safeToSpend(state, '2026-11', '2026-11-12').fromPots, 0);
+});
+
+test('default splits: the general default, a category with its own split, and one that keeps it all', () => {
+  const state = potState();
+  state.goals[0].plan = { type: 'percent', value: 20 };
+  state.goals[1].plan = { type: 'fixed', value: 10000 };
+  const cat = (id, split) => { state.categories = state.categories.map((c) => (c.id === id ? { ...c, split } : c)); };
+  assert.equal(defaultSplit(state, 'c_salary').source, 'general');
+  assert.deepEqual([...defaultSplit(state, 'c_salary').rules.keys()], ['save', 'trip']);
+  cat('c_other_income', 'keep');
+  assert.deepEqual([defaultSplit(state, 'c_other_income').source, defaultSplit(state, 'c_other_income').rules.size], ['keep', 0]);
+  cat('c_salary', { save: { type: 'percent', value: 50 }, gone: { type: 'fixed', value: 500 }, trip: { type: 'fixed', value: 0 } });
+  const own = defaultSplit(state, 'c_salary');
+  assert.equal(own.source, 'own');
+  assert.deepEqual([...own.rules], [['save', { type: 'percent', value: 50 }]], 'a deleted set-aside and an empty rule are ignored');
+  assert.deepEqual(sourcesOf(state, state.goals[0]).map((s) => [s.categoryId, s.rule.value]), [[null, 20], ['c_salary', 50]]);
+  assert.deepEqual(suggestSplit(state, tx('x', '2026-12-01', 50000, { kind: 'income', categoryId: 'c_other_income' })), {});
+  assert.deepEqual(suggestSplit(state, tx('y', '2026-12-01', 50000, { kind: 'income', categoryId: 'c_salary' })), { save: 25000 });
+});
+
+test('split suggestions: percentages, fixed amounts a month, the target cap and priority order', () => {
+  const state = potState();
+  state.transactions = [];
+  state.goals[0].plan = { type: 'percent', value: 20 }; // save
+  state.goals[1].plan = { type: 'fixed', value: 10000 }; // trip: 100 a month
+  state.goals[2].plan = { type: 'fixed', value: 50000 }; // pods: target 349
+  const pay = tx('p1', '2026-11-01', 100000, { kind: 'income', categoryId: 'c_salary' });
+  assert.deepEqual(suggestSplit(state, pay), { save: 20000, trip: 10000, pods: 34900 }, 'pods stops at its target');
+  // The first pay is split; a second income in the same month only tops the fixed amount up.
+  state.transactions = [{ ...pay, split: { save: 20000, trip: 4000 } }];
+  const second = tx('p2', '2026-11-20', 20000, { kind: 'income', categoryId: 'c_salary' });
+  assert.deepEqual(suggestSplit(state, second), { save: 4000, trip: 6000, pods: 10000 }, 'trip gets the missing 60, pods what is left');
+  assert.equal(planSplit(state, second).short, 34900 - 10000);
+  // Re-opening the first pay's split doesn't count its own share as "already set aside".
+  assert.equal(planSplit(state, state.transactions[0]).rows[1].want, 10000);
+  // Pay that counts in the next month fills that month's fixed amount.
+  const forDec = tx('p3', '2026-11-28', 100000, { kind: 'income', categoryId: 'c_salary', month: '2026-12' });
+  assert.equal(suggestSplit(state, forDec).trip, 10000);
+  // Priority order decides who is filled first when the income is small.
+  state.goals[2].order = 0;
+  assert.deepEqual(sortedGoals(state).map((g) => g.id), ['pods', 'save', 'trip']);
+  assert.deepEqual(suggestSplit(state, tx('p4', '2026-12-05', 30000, { kind: 'income', categoryId: 'c_salary' })), { pods: 30000 });
+});
+
+test('try a pay amount: the split, bills still to come and what is left per day', () => {
+  const state = potState();
+  state.goals[0].plan = { type: 'percent', value: 20 };
+  state.recurring = [rule({ id: 'phone', amount: 3000, startDate: '2026-11-20' })];
+  const base = spendPerDay(state, '2026-11-12');
+  const t = tryPay(state, { amount: 50000, categoryId: 'c_salary' }, '2026-11-12');
+  assert.equal(t.setAside, 10000);
+  assert.equal(t.keep, 40000);
+  assert.equal(t.bills, 3000);
+  assert.equal(t.free, base.free + 40000);
+  assert.equal(t.perDay, Math.floor((base.free + 40000 + base.spentToday) / 19));
+});
+
+test('planned vs set aside for a time frame', () => {
+  const state = potState();
+  state.goals[0].plan = { type: 'percent', value: 10 };
+  state.goals[1].plan = { type: 'fixed', value: 10000 };
+  state.transactions.push(tx('side', '2026-11-15', 20000, { kind: 'income', categoryId: 'c_other_income' }));
+  state.goals[0].contributions.push({ id: 'c2', date: '2026-11-10', amount: 5000 }, { id: 'c3', date: '2026-11-11', amount: -2000 }, { id: 'm1', date: '2026-11-12', amount: 7000, move: 'trip' });
+  const nov = timeframe('month', '2026-11-12');
+  const planned = plannedFor(state, inRange(state.transactions, nov));
+  assert.deepEqual([...planned.byGoal], [['save', 12000], ['trip', 10000], ['pods', 0]], 'trip is topped up once a month');
+  assert.equal(planned.income, 120000);
+  const actual = setAsideIn(state, nov);
+  assert.deepEqual([...actual.byGoal], [['save', 23000], ['trip', 10000], ['pods', 0]], 'moves and spending are left out');
+  assert.equal(setAsideIn(state, timeframe('custom', '2026-11-12', { from: '2026-10-01', to: '2026-10-31' })).total, 30000);
+});
+
+test('plan checks: share of income, goal timelines and the safety buffer', () => {
+  const state = potState();
+  state.goals[0].plan = { type: 'percent', value: 20 };
+  state.goals[0].buffer = true;
+  state.goals[2].plan = { type: 'fixed', value: 6000 };
+  state.transactions.push(tx('oct', '2026-10-10', 25000), tx('sep', '2026-09-10', 15000));
+  const checks = planChecks(state, '2026-11-12');
+  assert.equal(checks.share, 26000 / 100000);
+  const pods = checks.goals[0];
+  assert.deepEqual([pods.perMonth, pods.remaining, pods.status], [2000, 34900, 'behind']);
+  assert.equal(pods.needed, Math.ceil(34900 / 4));
+  assert.equal(checks.buffer.usual, 20000, 'the average of the full months with spending');
+  assert.equal(checks.buffer.months, 50000 / 20000);
+  assert.equal(bufferCheck({ ...state, goals: state.goals.map((g) => ({ ...g, buffer: false })) }, '2026-11-12'), null);
+});
+
+test('income waits to be split only from the day splitting was first used', () => {
+  const state = potState();
+  state.transactions.push(tx('late', '2026-11-20', 5000, { kind: 'income' }), tx('early', '2026-10-02', 5000, { kind: 'income' }), tx('kept', '2026-11-21', 100, { kind: 'income', split: 'kept' }));
+  assert.deepEqual(toSplit(state), [], 'not before splitting has been used');
+  state.settings.splitSince = '2026-11-01';
+  assert.deepEqual(toSplit(state).map((t) => t.id), ['late']);
+  assert.deepEqual(toSplit({ ...state, goals: [] }), []);
+});
+
+test('merge and store: splits travel with the income entry, and a move is one change', () => {
+  const base = potState();
+  const mine = { ...base, transactions: base.transactions.map((t) => (t.id === 'pay' ? { ...t, split: { save: 50000 }, updatedAt: 5 } : t)) };
+  const theirs = { ...base, transactions: [...base.transactions, tx('new', '2026-11-09', 100, { potId: 'trip', updatedAt: 3 })] };
+  const merged = mergeStates(mine, theirs);
+  assert.deepEqual(merged.transactions.find((t) => t.id === 'pay').split, { save: 50000 });
+  assert.equal(potBalance(merged, merged.goals[0]), 80000);
+  assert.equal(merged.transactions.find((t) => t.id === 'new').potId, 'trip');
+  const store = createStore(base);
+  store.moveBetween('save', 'trip', { amount: 2500, date: '2026-11-12' });
+  const after = store.get();
+  assert.deepEqual([potBalance(after, after.goals[0]), potBalance(after, after.goals[1])], [47500, 6500]);
+  assert.deepEqual(after.goals[1].contributions.map((c) => [c.amount, c.move]), [[2500, 'save']]);
+  assert.equal(balance(after, '2026-11-12').savings, balance(base, '2026-11-12').savings, 'a move changes no totals');
+  store.addContribution('trip', { amount: 100, date: '2026-10-28', month: '2026-11' });
+  assert.equal(setAsideInMonth(store.get(), store.get().goals[1], '2026-11'), 10100);
+});
+
+test('budgets scale to the time frame', () => {
+  assert.equal(monthsCovered('2026-11-01', '2026-11-30'), 1);
+  assert.equal(monthsCovered('2026-01-01', '2026-12-31'), 12);
+  assert.equal(monthsCovered('2026-11-01', '2026-11-15'), 0.5);
+  assert.equal(monthsCovered('2026-10-17', '2026-11-15'), 15 / 31 + 0.5);
+  const state = seedState('SGD');
+  state.categories = state.categories.map((c) => (c.id === 'c_food' ? { ...c, monthlyBudget: 30000 } : c));
+  state.transactions = [tx('a', '2026-10-20', 5000), tx('b', '2026-11-10', 7000), tx('first', '2026-09-16', 100)];
+  const range = timeframe('custom', '2026-11-12', { from: '2026-10-17', to: '2026-11-15' });
+  const food = budgetSummary(state, range, rangeMonths(range, state, '2026-11-12')).rows.find((r) => r.category.id === 'c_food');
+  assert.deepEqual([food.spent, food.budget], [12000, Math.round(30000 * (15 / 31 + 0.5))]);
+  assert.equal(rangeMonths(timeframe('month', '2026-11-12'), state, '2026-11-12'), 1);
+  assert.equal(rangeMonths(timeframe('all', '2026-11-12'), state, '2026-11-12'), 0.5 + 1 + 12 / 30, 'from the first entry to today');
+});
+
+test('recurring: entries still to come between two dates', () => {
+  const state = {
+    ...emptyState(),
+    recurring: [rule({ id: 'rent', startDate: '2026-01-31' }), rule({ id: 'gym', name: 'Gym', startDate: '2026-11-05', endDate: '2027-01-31' })],
+    transactions: [{ id: occurrenceId('rent', '2026-12') }],
+    deleted: { [occurrenceId('gym', '2026-12')]: 1 },
+  };
+  const list = occurrencesBetween(state, '2026-11-13', '2027-02-28');
+  assert.deepEqual(list.map((o) => [o.rule.id, o.date]), [['rent', '2026-11-30'], ['gym', '2027-01-05'], ['rent', '2027-01-31'], ['rent', '2027-02-28']]);
+  assert.equal(occurrencesBetween(state, '2026-11-13', '9999-12-31', 2).length, 3, 'open-ended ranges stop after the limit');
+});
+
+test('time buckets: days, then weeks, then months', () => {
+  const day = timeBuckets({ from: '2026-11-01', to: '2026-11-30' });
+  assert.deepEqual([day.size, day.buckets.length, day.buckets[29].from], ['day', 30, '2026-11-30']);
+  const week = timeBuckets({ from: '2026-10-01', to: '2026-11-12' }); // 1 Oct 2026 is a Thursday
+  assert.equal(week.size, 'week');
+  assert.deepEqual([week.buckets[0].from, week.buckets[0].to, week.buckets[1].from], ['2026-10-01', '2026-10-04', '2026-10-05']);
+  assert.equal(week.buckets.at(-1).to, '2026-11-12');
+  const month = timeBuckets({ from: '2026-01-15', to: '2026-12-31' });
+  assert.deepEqual([month.size, month.buckets.length, month.buckets[0].from, month.buckets[0].month], ['month', 12, '2026-01-15', '2026-01']);
+});
+
+test('money in and out per bucket, with early pay placed in the month it counts in', () => {
+  const nov = timeframe('month', '2026-11-12');
+  const list = [tx('p', '2026-10-26', 80000, { kind: 'income', month: '2026-11' }), tx('a', '2026-11-03', 1000), tx('b', '2026-11-03', 500), tx('c', '2026-11-30', 700)];
+  const { rows } = flowSeries(inRange(list, nov), { from: nov.from, to: nov.to });
+  assert.deepEqual([rows[0].income, rows[2].expense, rows[29].expense], [80000, 1500, 700]);
+  const year = flowSeries(list, { from: '2026-01-01', to: '2026-12-31' });
+  assert.deepEqual([year.size, year.rows[9].income, year.rows[10].income, year.rows[10].expense], ['month', 0, 80000, 2200]);
+});
+
+test('spending pace: day by day against an even pace, and when the money runs out', () => {
+  const state = seedState('SGD');
+  state.transactions = [tx('i', '2026-11-01', 60000, { kind: 'income' }), tx('a', '2026-11-02', 10000), tx('b', '2026-11-10', 14000), tx('bill', '2026-11-05', 6000, { recurringId: 'r' })];
+  const p = pace(state, '2026-11-10');
+  assert.deepEqual([p.cumulative[0], p.cumulative[1], p.cumulative[4], p.cumulative[9]], [0, 10000, 16000, 30000]);
+  assert.equal(p.affordable, 60000);
+  assert.deepEqual([p.even[9], p.even[29]], [20000, 60000]);
+  assert.equal(p.ahead, 10000, 'ahead of an even pace');
+  assert.equal(p.perDay, 2400, 'bills are left out of the day-to-day pace');
+  assert.equal(p.runOut, '2026-11-22', '30000 left at 2400 a day lasts 12 more days');
+  state.transactions.push(tx('i2', '2026-11-10', 100000, { kind: 'income' }));
+  assert.equal(pace(state, '2026-11-10').runOut, null, 'lasts the month');
+});
+
+test('where income went, spending by weekday and the balance over time', () => {
+  const state = potState();
+  const nov = timeframe('month', '2026-11-12');
+  assert.deepEqual(incomeUse(state, nov), { income: 100000, spent: 4000, fromPots: 6000, setAside: 30000, kept: 66000 });
+  const days = weekdaySpend(state.transactions, { from: '2026-11-02', to: '2026-11-30' }, '2026-11-12'); // 2 Nov is a Monday
+  assert.deepEqual([days[0].count, days[3].count, days[4].count], [2, 2, 1]);
+  assert.deepEqual([days[3].total, days[3].average, days[4].total], [4000, 2000, 6000]);
+  const series = balanceSeries(state, { from: '2026-10-30', to: '2026-11-30' }, '2026-11-06');
+  assert.deepEqual([series.length, series[0].total, series[0].savings, series.at(-1).total, series.at(-1).savings], [8, 0, 30000, 90000, 54000]);
+});
+
+test('import: income was split in Spend & Save already, and money set aside for next month counts there', () => {
+  const backup = spendSaveBackup();
+  backup.months['m-2026-08'].tx[0].for = '2026-09';
+  const { state } = importSpendSave(backup, seedState('SGD'));
+  assert.equal(state.transactions.find((t) => t.id === 'ss-a1').split, 'kept', 'not asked about again');
+  const holiday = state.goals.find((g) => g.name === 'Holiday');
+  // 150 set aside from pay meant for September, less the 60 flight deposit paid out of it in September.
+  assert.equal(setAsideInMonth(state, holiday, '2026-09'), 15000 - 6000, 'set aside from pay meant for September');
+  assert.equal(setAsideInMonth(state, holiday, '2026-08'), 5000, 'only the starting amount counts in August');
+  state.settings.splitSince = '2026-01-01';
+  assert.deepEqual(toSplit(state).map((t) => t.id), []);
+});
+
+test('insight facts: top category, biggest expense, daily average and no-spend days', () => {
+  const state = seedState('SGD');
+  state.transactions = [tx('i', '2026-11-01', 50000, { kind: 'income' }), tx('a', '2026-11-03', 3000), tx('b', '2026-11-03', 9000, { categoryId: 'c_fun' }), tx('c', '2026-11-08', 2000, { categoryId: 'c_fun' }), tx('old', '2026-10-20', 4000, { categoryId: 'c_fun' })];
+  const nov = timeframe('month', '2026-11-12');
+  const f = facts(state, nov, previousTimeframe(nov), '2026-11-12');
+  assert.deepEqual([f.top.id, f.top.value, f.top.previous], ['c_fun', 11000, 4000]);
+  assert.deepEqual([f.rise.id, f.rise.change], ['c_fun', 7000]);
+  assert.equal(f.biggest.id, 'b');
+  assert.deepEqual([f.daysElapsed, f.avgPerDay, f.noSpendDays], [12, Math.round(14000 / 12), 10]);
+  assert.equal(f.previousExpense, 4000);
 });
 
 // ---------- runner ----------

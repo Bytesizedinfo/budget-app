@@ -1,4 +1,4 @@
-import { addMonths, dayOf, dayOfWeek, daysInMonth, monthOf, monthRange } from './dates.js';
+import { addMonths, dayOf, dayOfWeek, daysInMonth, monthOf, monthRange, monthsCovered } from './dates.js';
 import { occurrenceId, occurrenceIn } from './recurring.js';
 
 export const byNewest = (a, b) => String(b.date).localeCompare(String(a.date)) || (b.updatedAt ?? 0) - (a.updatedAt ?? 0);
@@ -56,12 +56,28 @@ export function budgetLevel(spent, budget) {
   return 'ok';
 }
 
-export function budgetSummary(state, month) {
-  const spent = spendByCategory(inMonth(state.transactions, month));
+// The actual first and last day of a time frame. "All time" runs from the first recorded entry to today.
+export function rangeSpan(range, state, today) {
+  if (range.choice !== 'all') return { from: range.from, to: range.to };
+  const first = state.transactions.reduce((min, t) => (typeof t.date === 'string' && t.date < min ? t.date : min), today);
+  return { from: first, to: today };
+}
+
+// How many months a time frame covers (see monthsCovered), for comparing monthly amounts with any stretch.
+export function rangeMonths(range, state, today) {
+  if (range.month) return 1;
+  const span = rangeSpan(range, state, today);
+  return monthsCovered(span.from, span.to);
+}
+
+// period: a month ("2026-11") or a time frame. scale: how many months it covers, so each monthly budget is
+// compared with spending over the same stretch (S$300 a month is S$450 over a month and a half).
+export function budgetSummary(state, period, scale = 1) {
+  const spent = spendByCategory(typeof period === 'string' ? inMonth(state.transactions, period) : inRange(state.transactions, period));
   const rows = sortCategories(state.categories.filter((c) => c.kind === 'expense' && (!c.archived || spent.has(c.id)))).map((category) => ({
     category,
     spent: spent.get(category.id) ?? 0,
-    budget: Number.isSafeInteger(category.monthlyBudget) ? category.monthlyBudget : null,
+    budget: Number.isSafeInteger(category.monthlyBudget) ? Math.round(category.monthlyBudget * scale) : null,
   }));
   const shown = new Set(rows.map((r) => r.category.id));
   let totalBudget = 0;
@@ -86,7 +102,10 @@ export function safeToSpend(state, month, today) {
   if (!(limit > 0)) return null;
   const current = monthOf(today);
   const monthTransactions = inMonth(state.transactions, month);
-  const spent = totals(monthTransactions).expense;
+  // Spending paid from a set-aside was planned for, so it doesn't count against the limit.
+  const fromPot = paidFromPot(state);
+  const fromPots = monthTransactions.filter(fromPot).reduce((sum, t) => sum + t.amount, 0);
+  const spent = totals(monthTransactions).expense - fromPots;
   const ids = new Set(monthTransactions.map((t) => t.id));
   const upcoming = month < current ? [] : state.recurring
     .filter((rule) => rule.kind === 'expense')
@@ -96,13 +115,13 @@ export function safeToSpend(state, month, today) {
   const reserved = upcoming.reduce((sum, u) => sum + u.rule.amount, 0);
   const left = limit - spent - reserved;
   const result = {
-    limit, spent, reserved, upcoming, left, level: left < 0 ? 'over' : 'ok', past: month < current, future: month > current,
+    limit, spent, fromPots, reserved, upcoming, left, level: left < 0 ? 'over' : 'ok', past: month < current, future: month > current,
     daysLeft: null, spentToday: 0, perDay: null, todayLeft: null, weekLeft: null, evenShare: null,
   };
   if (month !== current) return result;
 
   const daysLeft = daysInMonth(month) - dayOf(today) + 1;
-  const spentToday = totals(monthTransactions.filter((t) => t.date === today)).expense;
+  const spentToday = totals(monthTransactions.filter((t) => t.date === today && !fromPot(t))).expense;
   const pool = Math.max(0, left + spentToday); // What today and the rest of the month share, before today's spending.
   const perDay = Math.floor(pool / daysLeft);
   const weekDaysLeft = Math.min(7 - dayOfWeek(today), daysLeft); // Monday–Sunday, cut off at month end.
@@ -121,11 +140,53 @@ export function safeToSpend(state, month, today) {
   };
 }
 
+// ---------- Set-asides (savings goals and pots) ----------
+// A set-aside's money moves in three ways: amounts added or taken out by hand (its contributions), income
+// split into it (kept on the income entry as `split`), and expenses paid from it (`potId` on the expense).
+// Splits and payments live on the transaction itself, so editing or deleting it can't leave the two out of step.
+
+// The split of an income entry as { setAsideId: cents }, or null if it has none.
+export const splitOf = (t) => (t.kind === 'income' && t.split !== null && typeof t.split === 'object' ? t.split : null);
+
+// Tells whether an expense was paid from a set-aside that still exists.
+export function paidFromPot(state) {
+  const pots = new Set(state.goals.map((g) => g.id));
+  return (t) => t.kind !== 'income' && pots.has(t.potId);
+}
+
+// How much of an income entry is set aside (into set-asides that still exist).
+export function splitTotal(state, t) {
+  const split = splitOf(t);
+  if (!split) return 0;
+  return state.goals.reduce((sum, g) => sum + (split[g.id] > 0 ? split[g.id] : 0), 0);
+}
+
+// Every movement in or out of one set-aside. kind: 'manual' (added or taken out by hand), 'move' (to or from
+// another set-aside), 'split' (from an income entry) or 'paid' (an expense paid from it).
+export function potEntries(state, goal) {
+  const entries = goal.contributions.map((c) => ({ id: c.id, date: c.date, amount: c.amount, month: monthKey(c), kind: c.move ? 'move' : 'manual', move: c.move ?? null }));
+  for (const t of state.transactions) {
+    if (typeof t.date !== 'string') continue;
+    const share = splitOf(t)?.[goal.id];
+    if (share > 0) entries.push({ id: t.id, date: t.date, amount: share, month: monthKey(t), kind: 'split', tx: t });
+    else if (t.kind !== 'income' && t.potId === goal.id) entries.push({ id: t.id, date: t.date, amount: -t.amount, month: monthKey(t), kind: 'paid', tx: t });
+  }
+  return entries;
+}
+
+// What's in a set-aside now, or (with asOf) at the end of a given day.
+export function potBalance(state, goal, asOf = null) {
+  let sum = 0;
+  for (const e of potEntries(state, goal)) if (!asOf || e.date <= asOf) sum += e.amount;
+  return sum;
+}
+
 // How much there is in total up to a date: everything recorded as income minus everything
-// spent, and how much of that has been put into savings goals.
+// spent, and how much of that is set aside.
 export function balance(state, asOf) {
   const { net } = totals(state.transactions.filter((t) => typeof t.date === 'string' && t.date <= asOf));
-  const savings = state.goals.reduce((sum, g) => sum + g.contributions.filter((c) => c.date <= asOf).reduce((s, c) => s + c.amount, 0), 0);
+  // An overdrawn set-aside counts as empty: the shortfall has come out of spending money.
+  const savings = state.goals.reduce((sum, g) => sum + Math.max(0, potBalance(state, g, asOf)), 0);
   return { total: net, savings, spending: net - savings };
 }
 
@@ -139,8 +200,8 @@ export function trend(state, endMonth, count = 12) {
   return [...sums.values()];
 }
 
-export function goalProgress(goal, today) {
-  const saved = goal.contributions.reduce((sum, c) => sum + c.amount, 0);
+export function goalProgress(state, goal, today) {
+  const saved = potBalance(state, goal);
   // Without a target, a goal is just a pot that tracks what's been put aside.
   if (!(goal.target > 0)) return { saved, remaining: null, ratio: null, done: false, perMonth: null, overdue: false, open: true };
   const remaining = Math.max(0, goal.target - saved);
@@ -167,7 +228,9 @@ export function spendPerDay(state, today) {
     .filter(({ date, id }) => date && date > today && !ids.has(id) && !(id in state.deleted))
     .sort((a, b) => a.date.localeCompare(b.date));
   const reserved = upcoming.reduce((sum, u) => sum + u.rule.amount, 0);
-  const spentToday = totals(dated.filter((t) => t.date === today)).expense;
+  // Spending paid from a set-aside didn't come out of spending money, so it isn't added back.
+  const fromPot = paidFromPot(state);
+  const spentToday = totals(dated.filter((t) => t.date === today && !fromPot(t))).expense;
   const free = spending - reserved;
   const pool = Math.max(0, free + spentToday);
   const perDay = Math.floor(pool / daysLeft);

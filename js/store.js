@@ -120,9 +120,16 @@ export function createStore(initial = emptyState()) {
     setSettings(patch) {
       commit({ ...state, settings: { ...state.settings, ...patch, updatedAt: stamp() } }, 'local');
     },
-    addContribution(goalId, { amount, date }) {
-      const contribution = { id: newId(), amount, date, updatedAt: stamp() };
+    addContribution(goalId, { amount, date, ...extra }) {
+      const contribution = { ...extra, id: newId(), amount, date, updatedAt: stamp() };
       commit({ ...state, goals: updateGoal(goalId, (g) => ({ ...g, contributions: [...g.contributions, contribution] })) }, 'local');
+    },
+    // Moves money from one set-aside to another in a single change, so the two halves can't come apart.
+    moveBetween(fromId, toId, { amount, date }) {
+      const out = { id: newId(), amount: -amount, date, move: toId, updatedAt: stamp() };
+      const into = { id: newId(), amount, date, move: fromId, updatedAt: stamp() };
+      const add = (g, c) => ({ ...g, contributions: [...g.contributions, c], updatedAt: stamp() });
+      commit({ ...state, goals: state.goals.map((g) => (g.id === fromId ? add(g, out) : g.id === toId ? add(g, into) : g)) }, 'local');
     },
     removeContribution(goalId, id) {
       const goals = updateGoal(goalId, (g) => ({ ...g, contributions: g.contributions.filter((c) => c.id !== id) }));

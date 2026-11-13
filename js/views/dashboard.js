@@ -1,9 +1,12 @@
-import { balance, budgetLevel, budgetSummary, byNewest, categoryName, goalProgress, inRange, monthKey, safeToSpend, spendByCategory, spendPerDay, sumBy, totals } from '../calc.js';
+import { balance, budgetLevel, budgetSummary, byNewest, categoryName, goalProgress, inRange, monthKey, paidFromPot, potEntries, safeToSpend, spendByCategory, spendPerDay, sumBy, totals } from '../calc.js';
 import { barList } from '../charts.js';
 import { dayOf, daysInMonth, formatMonth, formatMonthName, formatShortDate, monthOf, previousTimeframe, timeframe, timeframeText, todayISO } from '../dates.js';
 import { h, icon } from '../dom.js';
 import { formatApprox } from '../money.js';
+import { pace } from '../insights.js';
+import { sortedGoals } from '../pots.js';
 import { nextDate } from '../recurring.js';
+import { toSplitCard } from '../split.js';
 import { transactionDialog, txRow } from '../tx.js';
 import { budgetRow, card, cardLink, empty, meter, notice, openDialog, segmented, signedAmount, timeframePicker, viewHead } from '../ui.js';
 import { limitDialog } from './budgets.js';
@@ -14,7 +17,7 @@ export function renderDashboard(ctx) {
   const state = ctx.store.get();
   const today = todayISO();
   // Safe to spend, spend per day and budgets are always about the rest of this month. Everything else follows
-  // the time frame picked at the top (shared with Transactions).
+  // the time frame picked at the top (shared with every other page).
   const month = monthOf(today);
   const range = timeframe(ctx.ui.timeframe.choice, today, ctx.ui.timeframe);
   const previous = previousTimeframe(range);
@@ -28,9 +31,10 @@ export function renderDashboard(ctx) {
   return h('div', { class: 'view' },
     viewHead(ctx, 'Overview', { actions: [timeframePicker(ctx)] }),
     h('div', { class: 'stack' },
+      toSplitCard(ctx),
       h('div', { class: 'hero-row' },
         safe ? safeHero(ctx, safe, month) : hero(ctx, budgets, month, today),
-        perDayCard(ctx, daily, safe, month)),
+        perDayCard(ctx, daily, safe, month, pace(state, today))),
       balanceCard(ctx, state, today),
       h('p', { class: 'range-note' }, icon('info', 'icon-sm'), `Income, spending and the lists below: ${timeframeText(range)}. Tap any number to see how it’s worked out.`),
       h('div', { class: 'kpis' },
@@ -55,6 +59,7 @@ function safeHero(ctx, safe, month) {
     `${ctx.money(safe.spent)} spent`,
     safe.reserved ? `${ctx.money(safe.reserved)} in bills still to come` : null,
     `${ctx.money(safe.limit)} limit`,
+    safe.fromPots ? `${ctx.money(safe.fromPots)} paid from set-asides isn’t counted` : null,
   ].filter(Boolean).join(' · '));
 
   if (safe.past) {
@@ -109,7 +114,7 @@ function safeHero(ctx, safe, month) {
 }
 
 // What you can spend each day for the rest of the month, from the money you actually have.
-function perDayCard(ctx, d, safe, month) {
+function perDayCard(ctx, d, safe, month, p) {
   const name = formatMonthName(month);
   const overToday = d.todayLeft < 0;
   return card({ cls: 'perday' },
@@ -122,20 +127,23 @@ function perDayCard(ctx, d, safe, month) {
       h('span', {}, `Today: ${ctx.money(d.spentToday)} spent`),
       h('span', { class: overToday ? 'bad' : 'good' }, overToday ? `${ctx.money(-d.todayLeft)} over today’s share` : `${ctx.money(d.todayLeft)} left today`)),
     d.free < 0 ? notice('over', `Bills still to come this month are ${ctx.money(-d.free)} more than your spending money.`) : null,
+    d.free > 0 && p.runOut
+      ? notice('warn', `At this month’s pace (about ${ctx.money(p.perDay)} a day), your spending money runs out around ${formatShortDate(p.runOut)}.`)
+      : null,
     safe && !safe.past && !safe.future && safe.left < 0
       ? h('p', { class: 'perday-note' }, `Separately, you’re ${ctx.money(-safe.left)} over your ${ctx.money(safe.limit)} monthly limit.`)
       : null,
     h('button', { type: 'button', class: 'btn btn-ghost btn-sm perday-how', onclick: () => perDaySheet(ctx, d, month) }, 'How is this worked out?'));
 }
 
-// How much there is in total, and how much of it is set aside in savings goals. Always as of today.
+// How much there is in total, and how much of it is set aside. Always as of today.
 function balanceCard(ctx, state, today) {
   const b = balance(state, today);
   const open = (what) => () => balanceSheet(ctx, state, today, what);
   return card({ title: 'Total balance', sub: 'Income minus spending, as of today', cls: 'balance' },
     h('button', { type: 'button', class: `balance-value tap${b.total < 0 ? ' bad' : ''}`, onclick: open('total'), 'aria-label': `Total balance ${ctx.money(b.total)}: how it’s worked out` }, ctx.money(b.total)),
     h('div', { class: 'balance-parts' },
-      h('button', { type: 'button', class: 'tap', onclick: open('savings') }, h('span', { class: 'balance-label' }, 'In savings goals'), h('span', { class: 'balance-amount' }, ctx.money(b.savings))),
+      h('button', { type: 'button', class: 'tap', onclick: open('savings') }, h('span', { class: 'balance-label' }, 'Set aside'), h('span', { class: 'balance-amount' }, ctx.money(b.savings))),
       h('button', { type: 'button', class: 'tap', onclick: open('spending') }, h('span', { class: 'balance-label' }, 'Spending money'), h('span', { class: `balance-amount${b.spending < 0 ? ' bad' : ''}` }, ctx.money(b.spending)))));
 }
 
@@ -198,8 +206,8 @@ function spendingCard(ctx, transactions, range) {
   const shown = rows.length > 6
     ? [...rows.slice(0, 5), { label: `${rows.length - 5} more categories`, value: rows.slice(5).reduce((sum, r) => sum + r.value, 0) }]
     : rows;
-  return card({ title: 'Spending by category', sub: total ? `${ctx.money(total)} · ${timeframeText(range)}` : null, action: cardLink('Reports', '#/reports') },
-    rows.length ? barList(shown, { format: ctx.money, total }) : empty('Nothing spent in this time frame.'));
+  return card({ title: 'Spending by category', sub: total ? `${ctx.money(total)} · ${timeframeText(range)}` : null, action: cardLink('Insights', '#/insights') },
+    rows.length ? barList(shown, { format: ctx.money, total, cls: 's2' }) : empty('Nothing spent in this time frame.'));
 }
 
 function recentCard(ctx, transactions, range) {
@@ -225,13 +233,14 @@ function upcomingCard(ctx, state, today) {
 }
 
 function goalsCard(ctx, state, today) {
-  return card({ title: 'Savings goals', action: cardLink(state.goals.length ? 'All goals' : 'Add a goal', '#/goals') },
-    state.goals.length
-      ? h('div', { class: 'budget-list' }, state.goals.map((goal) => {
-        const p = goalProgress(goal, today);
+  const goals = sortedGoals(state);
+  return card({ title: 'Set aside', action: cardLink(goals.length ? 'Plan' : 'Add a set-aside', '#/plan') },
+    goals.length
+      ? h('div', { class: 'budget-list' }, goals.map((goal) => {
+        const p = goalProgress(state, goal, today);
         if (p.open) {
           return h('div', { class: 'budget-row' },
-            h('span', { class: 'budget-top' }, h('span', { class: 'budget-name' }, goal.name), h('span', { class: 'budget-left' }, `${ctx.money(p.saved)} saved`)));
+            h('span', { class: 'budget-top' }, h('span', { class: 'budget-name' }, goal.name), h('span', { class: 'budget-left' }, `${ctx.money(p.saved)} set aside`)));
         }
         return h('div', { class: 'budget-row' },
           h('span', { class: 'budget-top' },
@@ -240,7 +249,7 @@ function goalsCard(ctx, state, today) {
           meter(p.ratio),
           h('span', { class: 'budget-sub' }, `${ctx.money(p.saved)} of ${ctx.money(goal.target)}`));
       }))
-      : empty('Saving up for something? Set a goal and track it here.'));
+      : empty('Saving up for something, or keeping money apart for bills? Add a set-aside and split your income into it.'));
 }
 
 // ---------- "How this is worked out" sheets ----------
@@ -291,9 +300,11 @@ function flowSheet(ctx, kind, transactions, range) {
   const noun = kind === 'income' ? (n === 1 ? 'income entry' : 'income entries') : (n === 1 ? 'expense' : 'expenses');
   const lead = n === 0 ? `There are no ${noun} in ${timeframeText(range)}.` : `${what} = ${n === 1 ? `the one ${noun}` : `all ${n} ${noun}`} in ${timeframeText(range)} added up = `;
   const movedIn = range.month && list.some((t) => monthKey(t) !== String(t.date).slice(0, 7));
+  const fromPots = list.filter(paidFromPot(state)).reduce((s, t) => s + t.amount, 0);
   sheet(`${what}: how it’s worked out`,
     sumLine(lead, n ? h('b', {}, ctx.money(total)) : null),
     movedIn ? h('p', { class: 'bd-note' }, 'Pay marked for this month counts here, even though it arrived at the end of the month before.') : null,
+    fromPots ? h('p', { class: 'bd-note' }, `${ctx.money(fromPots)} of this was paid from set-asides, so it didn’t come out of your spending money.`) : null,
     byCategory(ctx, state, list, kind),
     entryList(ctx, state, list, !!range.month));
 }
@@ -302,7 +313,7 @@ function netSheet(ctx, transactions, range, now) {
   const state = ctx.store.get();
   sheet('Net: how it’s worked out',
     sumLine('Net = income ', h('b', {}, ctx.money(now.income)), ' − spent ', h('b', {}, ctx.money(now.expense)), ' = ', h('b', {}, ctx.money(now.net))),
-    h('p', { class: 'bd-note' }, `For ${timeframeText(range)}. Money moved into savings goals isn’t spending, so it isn’t taken off here.`),
+    h('p', { class: 'bd-note' }, `For ${timeframeText(range)}. Money you set aside isn’t spending, so it isn’t taken off here.`),
     entryList(ctx, state, transactions, !!range.month));
 }
 
@@ -315,26 +326,33 @@ function balanceSheet(ctx, state, today, what) {
   if (what === 'total') {
     sheet('Total balance: how it’s worked out',
       sumLine('Everything that came in up to today ', h('b', {}, ctx.money(all.income)), ` (${plural(ins, 'entry', 'entries')}) − everything spent `, h('b', {}, ctx.money(all.expense)), ` (${plural(outs, 'entry', 'entries')}) = `, h('b', {}, ctx.money(b.total))),
-      h('p', { class: 'bd-note' }, 'Every transaction you’ve recorded up to today, newest first. Money in savings goals is still part of this total.'),
+      h('p', { class: 'bd-note' }, 'Every transaction you’ve recorded up to today, newest first. Money you’ve set aside is still part of this total.'),
       entryList(ctx, state, upToToday, false));
     return;
   }
-  const goals = state.goals.map((g) => ({ g, items: g.contributions.filter((c) => c.date <= today).sort((a, b) => b.date.localeCompare(a.date)) }))
-    .map((x) => ({ ...x, saved: x.items.reduce((s, c) => s + c.amount, 0) }));
+  const nameOf = (id) => state.goals.find((g) => g.id === id)?.name ?? 'a deleted set-aside';
+  const label = (e) => {
+    if (e.kind === 'split') return `From ${e.tx.note || categoryName(state, e.tx.categoryId)}`;
+    if (e.kind === 'paid') return `Paid: ${e.tx.note || categoryName(state, e.tx.categoryId)}`;
+    if (e.kind === 'move') return e.amount > 0 ? `Moved from ${nameOf(e.move)}` : `Moved to ${nameOf(e.move)}`;
+    return e.amount > 0 ? 'Put in' : 'Taken out';
+  };
+  const goals = sortedGoals(state).map((g) => ({ g, items: potEntries(state, g).filter((e) => e.date <= today).sort((a, b) => b.date.localeCompare(a.date)) }))
+    .map((x) => ({ ...x, saved: x.items.reduce((s, e) => s + e.amount, 0) }));
   const goalsList = h('div', { class: 'bd-groups' }, goals.map(({ g, items, saved }) => h('section', { class: 'bd-group' },
     h('h3', { class: 'bd-head' }, h('span', {}, g.name), h('span', {}, ctx.money(saved))),
     items.length
-      ? h('ul', { class: 'bd-list' }, items.map((c) => h('li', {}, h('span', { class: 'bd-date' }, formatShortDate(c.date)), h('span', { class: 'bd-name' }, c.amount < 0 ? 'Taken out' : 'Put in'), h('span', { class: `amount${c.amount > 0 ? ' income' : ''}` }, ctx.money(c.amount, { sign: true })))))
+      ? h('ul', { class: 'bd-list' }, items.map((e) => h('li', {}, h('span', { class: 'bd-date' }, formatShortDate(e.date)), h('span', { class: 'bd-name' }, label(e)), h('span', { class: `amount${e.amount > 0 ? ' income' : ''}` }, ctx.money(e.amount, { sign: true })))))
       : h('p', { class: 'bd-note' }, 'Nothing put in yet.'))));
   if (what === 'savings') {
-    sheet('In savings goals: how it’s worked out',
-      sumLine('Everything put into your savings goals, minus anything taken out = ', h('b', {}, ctx.money(b.savings))),
+    sheet('Set aside: how it’s worked out',
+      sumLine('Everything put into your set-asides (by hand or split from income), minus anything taken out or paid from them = ', h('b', {}, ctx.money(b.savings))),
       goalsList);
     return;
   }
   sheet('Spending money: how it’s worked out',
-    sumLine('Total balance ', h('b', {}, ctx.money(b.total)), ' − in savings goals ', h('b', {}, ctx.money(b.savings)), ' = ', h('b', {}, ctx.money(b.spending))),
-    h('p', { class: 'bd-note' }, 'It’s the part of your money that isn’t set aside in a goal. Tap Total balance for every transaction behind it.'),
+    sumLine('Total balance ', h('b', {}, ctx.money(b.total)), ' − set aside ', h('b', {}, ctx.money(b.savings)), ' = ', h('b', {}, ctx.money(b.spending))),
+    h('p', { class: 'bd-note' }, 'It’s the part of your money that isn’t set aside. Tap Total balance for every transaction behind it.'),
     goalsList);
 }
 
@@ -349,6 +367,6 @@ function perDaySheet(ctx, d, month) {
     d.upcoming.length
       ? h('ul', { class: 'bd-cats' }, d.upcoming.map((u) => h('li', {}, h('span', {}, `${u.rule.name} · ${formatShortDate(u.date)}`), h('span', { class: 'amount' }, ctx.money(u.rule.amount)))))
       : h('p', { class: 'bd-note' }, `No bills still to come in ${formatMonthName(month)}.`),
-    h('p', { class: 'bd-note' }, 'Spending money is everything that came in, minus everything spent, minus what’s in your savings goals. Tap it on the Overview to see every entry.'),
+    h('p', { class: 'bd-note' }, 'Spending money is everything that came in, minus everything spent, minus what you’ve set aside. Tap it on the Overview to see every entry.'),
     h('p', { class: 'bd-note' }, plural(state.transactions.length, 'transaction is', 'transactions are') + ' recorded in total.'));
 }

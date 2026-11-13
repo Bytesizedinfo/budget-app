@@ -1,27 +1,42 @@
-import { budgetLevel, budgetSummary, inMonth, safeToSpend, sortCategories, sumBy } from '../calc.js';
-import { formatMonthName, formatShortDate, todayISO } from '../dates.js';
+import { budgetLevel, budgetSummary, inRange, rangeMonths, safeToSpend, sortCategories, sumBy } from '../calc.js';
+import { formatMonthName, formatShortDate, monthOf, timeframe, timeframeText, todayISO } from '../dates.js';
 import { h, icon } from '../dom.js';
 import { centsToInput, parseAmount } from '../money.js';
-import { budgetRow, card, checkbox, confirmDialog, empty, field, meter, openDialog, segmented, viewHead } from '../ui.js';
+import { budgetRow, card, checkbox, confirmDialog, empty, field, meter, openDialog, segmented, timeframePicker, viewHead } from '../ui.js';
+
+const percent = new Intl.NumberFormat(undefined, { style: 'percent', maximumFractionDigits: 0 });
+
+// How a time frame compares with a month, when it isn't one: "45% of a month" or "1.5 months".
+function scaleText(scale) {
+  if (Math.abs(scale - 1) < 0.005) return null;
+  return scale < 1 ? `${percent.format(scale)} of a month` : `${Number(scale.toFixed(1))} months`;
+}
 
 export function renderBudgets(ctx) {
   const state = ctx.store.get();
-  const month = ctx.ui.month;
-  const summary = budgetSummary(state, month);
-  const received = sumBy(inMonth(state.transactions, month), 'income');
+  const today = todayISO();
+  // Spending follows the time frame, and each monthly budget is scaled to the same stretch.
+  const range = timeframe(ctx.ui.timeframe.choice, today, ctx.ui.timeframe);
+  const scale = rangeMonths(range, state, today);
+  const scaled = scaleText(scale);
+  const summary = budgetSummary(state, range, scale);
+  const received = sumBy(inRange(state.transactions, range), 'income');
   const incomeCategories = sortCategories(state.categories.filter((c) => c.kind === 'income' && !c.archived));
   const archived = sortCategories(state.categories.filter((c) => c.archived));
   const edit = (category) => () => categoryDialog(ctx, category);
 
   return h('div', { class: 'view' },
     viewHead(ctx, 'Budgets', {
-      month: true,
-      actions: [h('button', { type: 'button', class: 'btn', onclick: () => categoryDialog(ctx) }, icon('plus'), 'New category')],
+      actions: [timeframePicker(ctx), h('button', { type: 'button', class: 'btn', onclick: () => categoryDialog(ctx) }, icon('plus'), 'New category')],
     }),
     h('div', { class: 'stack' },
-      limitCard(ctx, month),
-      summaryCard(ctx, summary, month),
-      card({ title: 'Spending categories', sub: 'Select a category to set or change its monthly budget.', cls: 'card-list' },
+      limitCard(ctx, monthOf(today)),
+      summaryCard(ctx, summary, range, scaled),
+      card({
+        title: 'Spending categories',
+        sub: `${timeframeText(range)}${scaled ? ` · monthly budgets scaled to ${scaled}` : ''}. Select a category to set or change its monthly budget.`,
+        cls: 'card-list',
+      },
         h('div', { class: 'row-list' }, summary.rows.map((row) => h('button', { type: 'button', class: 'row-btn', onclick: edit(row.category) },
           row.budget !== null
             ? budgetRow(ctx, row)
@@ -30,7 +45,7 @@ export function renderBudgets(ctx) {
                 h('span', { class: 'budget-name' }, row.category.name, row.category.archived ? h('span', { class: 'badge' }, 'Archived') : null),
                 h('span', { class: 'budget-left muted' }, `${ctx.money(row.spent)} spent`)),
               h('span', { class: 'budget-sub' }, 'No budget')))))),
-      card({ title: 'Income categories', cls: 'card-list' },
+      card({ title: 'Income categories', sub: timeframeText(range), cls: 'card-list' },
         incomeCategories.length
           ? h('div', { class: 'row-list' }, incomeCategories.map((c) => h('button', { type: 'button', class: 'row-btn', onclick: edit(c) },
             h('span', { class: 'budget-top' },
@@ -44,7 +59,7 @@ export function renderBudgets(ctx) {
         : null));
 }
 
-// One overall limit for everything spent in a month, bills included.
+// One overall limit for everything spent in a month, bills included. Always about this month.
 function limitCard(ctx, month) {
   const safe = safeToSpend(ctx.store.get(), month, todayISO());
   if (!safe) {
@@ -87,13 +102,13 @@ export function limitDialog(ctx) {
   });
 }
 
-function summaryCard(ctx, { totalBudget, budgetedSpent, unbudgeted }, month) {
+function summaryCard(ctx, { totalBudget, budgetedSpent, unbudgeted }, range, scaled) {
   if (!totalBudget) {
     return card({ title: 'Category budgets' },
       h('p', { class: 'card-text' }, 'You can also give a spending category its own monthly limit: select it below. Budgets repeat every month, and you can change them any time.'));
   }
   const left = totalBudget - budgetedSpent;
-  return card({ title: `${formatMonthName(month)} at a glance` },
+  return card({ title: 'Category budgets at a glance', sub: `${timeframeText(range)}${scaled ? ` · monthly budgets scaled to ${scaled}` : ''}` },
     h('dl', { class: 'totals' },
       h('div', {}, h('dt', {}, 'Budgeted'), h('dd', {}, ctx.money(totalBudget))),
       h('div', {}, h('dt', {}, 'Spent'), h('dd', {}, ctx.money(budgetedSpent))),

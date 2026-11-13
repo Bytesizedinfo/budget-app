@@ -76,6 +76,19 @@ export function addDays(iso, n) {
 
 export const daysBetween = (from, to) => Math.round((toDate(to) - toDate(from)) / 86400000);
 
+// How many months a stretch of days covers, counting part-months by their days:
+// a whole month is 1, a whole year 12, and 45 days about one and a half.
+export function monthsCovered(from, to) {
+  if (!isValidDate(from) || !isValidDate(to) || from > to) return 0;
+  let total = 0;
+  for (const month of monthRange(monthOf(from), monthOf(to))) {
+    const first = month === monthOf(from) ? dayOf(from) : 1;
+    const last = month === monthOf(to) ? dayOf(to) : daysInMonth(month);
+    total += (last - first + 1) / daysInMonth(month);
+  }
+  return total;
+}
+
 // The time frames transactions and totals can be looked at for. A whole-month choice carries `month`, so pay
 // marked for that month counts in it; any other range goes by the date each entry happened.
 export const TIMEFRAMES = [

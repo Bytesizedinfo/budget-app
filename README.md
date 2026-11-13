@@ -3,15 +3,18 @@
 A personal monthly budget that runs on GitHub Pages and keeps its data in a private GitHub repository.
 
 - Track income and expenses by category.
-- Pick the **time frame** for the Overview and Transactions: today, this week, the last 7 or 30 days, this month, last month, this year, all time, or your own dates. Each device remembers its choice.
+- Pick the **time frame** on every page that shows money: today, this week, the last 7 or 30 days, this month, last month, this year, all time, or your own dates. Each device remembers its choice. Budgets scale each monthly budget to the range (S$300 a month is S$450 over 45 days).
+- **Split every income**: when income comes in, you're asked how much to set aside into each set-aside (a savings goal, a pot, or money kept for one kind of spending) and how much to keep for spending. The amounts are filled in from a default split.
+- **Plan** your set-asides: a default split for all income, and its own split (or keep it all) for each kind of income, with each set-aside getting a fixed amount a month or a percentage of the income. Try a pay amount before it arrives, compare planned with actually set aside, move money between set-asides, mark a safety buffer, and see whether each goal is on track for its date.
+- Pay for an expense **from a set-aside**, so it doesn't eat into your spending money. A set-aside meant for a category is pre-selected for expenses in that category.
+- **Insights**: what your spending and income say in plain words, with charts of money in and out, this month's spending pace (and when your spending money would run out), where your income went, spending by category and by day of the week, income by source, and your balance over time.
 - See **what you can spend per day** for the rest of the month, from the money you actually have (spending money minus bills still to come), next to Safe to spend.
-- Tap any Overview number (total balance, savings goals, spending money, income, spent, net) to see **how it's worked out** and every entry behind it.
+- Tap any Overview number (total balance, set aside, spending money, income, spent, net) to see **how it's worked out** and every entry behind it.
 - Pay that lands at the end of a month can **count in the next month** ("Counts in" when adding income). Spend & Save pay logged "for next month" imports the same way.
 - Set one overall monthly spending limit, bills included. The Overview then shows what's **safe to spend** today, this week and this month, with bills still to come set aside, and warns you when you're spending too fast.
-- See your **total balance**: everything recorded as income minus spending, split into what's in savings goals and what's left as spending money.
+- See your **total balance**: everything recorded as income minus spending, split into what's set aside and what's left as spending money.
 - Optionally set monthly budgets per category too.
-- See charts of spending by category and income versus spending over 12 months.
-- Track savings goals, with or without a target amount.
+- See reports of spending by category and income versus spending over 12 months.
 - Add recurring bills and income, which are recorded automatically each month.
 - Choose any common currency in Settings.
 - Switch between light and dark mode with the moon/sun button in the header. Each device remembers its own choice.

@@ -2,7 +2,7 @@
 // back to the last cached copy of the app when offline. GitHub API calls are never cached.
 // Bump CACHE when files are added or renamed.
 
-const CACHE = 'budget-v4';
+const CACHE = 'budget-v5';
 const APP_FILES = [
   './',
   'index.html',
@@ -18,9 +18,12 @@ const APP_FILES = [
   'js/demo.js',
   'js/dom.js',
   'js/import-spendsave.js',
+  'js/insights.js',
   'js/merge.js',
   'js/money.js',
+  'js/pots.js',
   'js/recurring.js',
+  'js/split.js',
   'js/store.js',
   'js/sync.js',
   'js/syncui.js',
@@ -29,8 +32,9 @@ const APP_FILES = [
   'js/ui.js',
   'js/views/budgets.js',
   'js/views/dashboard.js',
-  'js/views/goals.js',
+  'js/views/insights.js',
   'js/views/more.js',
+  'js/views/plan.js',
   'js/views/recurring.js',
   'js/views/reports.js',
   'js/views/settings.js',

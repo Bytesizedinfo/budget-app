@@ -1,13 +1,15 @@
-import { categoriesFor, categoryName } from '../calc.js';
-import { dayOf, formatShortDate, isValidDate, ordinal, todayISO } from '../dates.js';
+import { byNewest, categoriesFor, categoryName, inRange, rangeSpan, totals } from '../calc.js';
+import { addDays, dayOf, formatShortDate, isValidDate, ordinal, timeframe, timeframeText, todayISO } from '../dates.js';
 import { h, icon } from '../dom.js';
 import { centsToInput, parseAmount } from '../money.js';
-import { backfillCount, nextDate } from '../recurring.js';
-import { card, checkbox, confirmDialog, empty, field, initialBadge, openDialog, segmented, signedAmount, viewHead } from '../ui.js';
+import { backfillCount, nextDate, occurrencesBetween } from '../recurring.js';
+import { txRow } from '../tx.js';
+import { card, checkbox, confirmDialog, empty, field, initialBadge, openDialog, segmented, signedAmount, timeframePicker, viewHead } from '../ui.js';
 
 export function renderRecurring(ctx) {
   const state = ctx.store.get();
   const today = todayISO();
+  const range = timeframe(ctx.ui.timeframe.choice, today, ctx.ui.timeframe);
   const rules = state.recurring
     .map((rule) => ({ rule, next: nextDate(rule, today) }))
     .sort((a, b) => (a.next ?? '9999').localeCompare(b.next ?? '9999') || a.rule.name.localeCompare(b.rule.name));
@@ -17,16 +19,42 @@ export function renderRecurring(ctx) {
   const newRule = h('button', { type: 'button', class: 'btn', onclick: () => ruleDialog(ctx) }, icon('plus'), 'New recurring item');
 
   return h('div', { class: 'view' },
-    viewHead(ctx, 'Recurring', { actions: [newRule] }),
+    viewHead(ctx, 'Recurring', { actions: [timeframePicker(ctx), newRule] }),
     h('p', { class: 'view-intro' }, 'Bills and income that repeat every month. Each one is added to your transactions automatically on its day.'),
     rules.length
       ? h('div', { class: 'stack' },
         h('div', { class: 'kpis kpis-2' },
           h('div', { class: 'card stat' }, h('p', { class: 'stat-label' }, 'Going out each month'), h('p', { class: 'stat-value' }, ctx.money(monthlyOut))),
           h('div', { class: 'card stat' }, h('p', { class: 'stat-label' }, 'Coming in each month'), h('p', { class: 'stat-value' }, ctx.money(monthlyIn)))),
-        card({ cls: 'card-list' }, h('div', { class: 'tx-list' }, rules.map(({ rule, next }) => ruleRow(ctx, rule, next, today)))))
+        rangeCard(ctx, state, range, today),
+        card({ title: 'All recurring items', cls: 'card-list' }, h('div', { class: 'tx-list' }, rules.map(({ rule, next }) => ruleRow(ctx, rule, next, today)))))
       : card({}, empty('Add rent, subscriptions, salary and other regular amounts once, and they’ll be recorded for you every month.',
         h('button', { type: 'button', class: 'btn btn-primary', onclick: () => ruleDialog(ctx) }, icon('plus'), 'New recurring item'))));
+}
+
+// What recurring items have added in the time frame, and what they will still add before it ends.
+function rangeCard(ctx, state, range, today) {
+  const span = rangeSpan(range, state, today);
+  const added = inRange(state.transactions, range).filter((t) => t.recurringId).sort(byNewest);
+  const tomorrow = addDays(today, 1);
+  const coming = occurrencesBetween(state, span.from > tomorrow ? span.from : tomorrow, span.to);
+  const done = totals(added);
+  const ahead = totals(coming.map(({ rule }) => rule));
+  const line = (label, count, sums) => h('p', { class: 'range-line' }, h('b', {}, label), ` ${count} ${count === 1 ? 'entry' : 'entries'}`,
+    sums.expense ? ` · ${ctx.money(sums.expense)} out` : '', sums.income ? ` · ${ctx.money(sums.income)} in` : '');
+  const more = (list) => (list.length > 6 ? h('p', { class: 'range-more' }, `And ${list.length - 6} more.`) : null);
+  return card({ title: 'In this time frame', sub: timeframeText(range), cls: 'card-list range-card' },
+    line('Already added:', added.length, done),
+    added.length ? h('div', { class: 'tx-list' }, added.slice(0, 6).map((t) => txRow(ctx, t, { showDate: true }))) : null,
+    more(added),
+    line('Still to come:', coming.length, ahead),
+    coming.length
+      ? h('ul', { class: 'upcoming range-upcoming' }, coming.slice(0, 6).map(({ rule, date }) => h('li', {},
+        h('span', { class: 'upcoming-date' }, formatShortDate(date)),
+        h('span', { class: 'upcoming-name' }, rule.name),
+        signedAmount(ctx, rule.kind, rule.amount))))
+      : null,
+    more(coming));
 }
 
 function ruleRow(ctx, rule, next, today) {

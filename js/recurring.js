@@ -43,6 +43,25 @@ export function nextDate(rule, today) {
   return null;
 }
 
+// The entries recurring items will add between two dates (inclusive), soonest first, leaving out any already
+// added or deleted. Looks at most `limit` months ahead, so an open-ended time frame stays small.
+export function occurrencesBetween(state, from, to, limit = 24) {
+  if (from > to) return [];
+  const existing = new Set(state.transactions.map((t) => t.id));
+  const cap = addMonths(monthOf(from), limit);
+  const last = cap < monthOf(to) ? cap : monthOf(to);
+  const out = [];
+  for (const rule of state.recurring) {
+    for (const month of monthRange(monthOf(from), last)) {
+      const date = occurrenceIn(rule, month);
+      const id = occurrenceId(rule.id, month);
+      if (!date || date < from || date > to || existing.has(id) || id in state.deleted) continue;
+      out.push({ rule, date, id });
+    }
+  }
+  return out.sort((a, b) => a.date.localeCompare(b.date) || a.rule.name.localeCompare(b.rule.name));
+}
+
 // How many entries a new rule would add straight away (for past start dates).
 export function backfillCount(rule, today) {
   return dueOccurrences({ transactions: [], deleted: {}, recurring: [rule] }, today).length;

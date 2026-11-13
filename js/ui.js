@@ -1,31 +1,28 @@
 // Shared building blocks for the views: headers, cards, meters, form fields and dialogs.
 
 import { budgetLevel } from './calc.js';
-import { addMonths, formatMonth, monthOf, TIMEFRAMES, timeframe, todayISO } from './dates.js';
+import { TIMEFRAMES, timeframe, todayISO } from './dates.js';
 import { h, icon } from './dom.js';
 
-export function viewHead(ctx, title, { month = false, actions = [] } = {}) {
+export function viewHead(ctx, title, { actions = [] } = {}) {
   return h('div', { class: 'view-head' },
     h('h1', { class: 'view-title' }, title),
-    h('div', { class: 'view-actions' }, month ? monthSwitcher(ctx) : null, actions));
+    h('div', { class: 'view-actions' }, actions));
 }
 
-export function monthSwitcher(ctx) {
-  const current = monthOf(todayISO());
-  const go = (month) => {
-    ctx.ui.month = month;
-    ctx.refresh();
-  };
-  return h('div', { class: 'month-switch' },
-    h('button', { type: 'button', class: 'icon-btn', 'aria-label': 'Previous month', onclick: () => go(addMonths(ctx.ui.month, -1)) }, icon('chevronLeft')),
-    h('button', {
-      type: 'button',
-      class: 'month-label',
-      'aria-live': 'polite',
-      title: ctx.ui.month === current ? null : 'Back to this month',
-      onclick: () => go(current),
-    }, formatMonth(ctx.ui.month)),
-    h('button', { type: 'button', class: 'icon-btn', 'aria-label': 'Next month', onclick: () => go(addMonths(ctx.ui.month, 1)) }, icon('chevronRight')));
+// A list of findings in plain words. items: [{ level: 'good' | 'warn' | 'info', text }]; the icon carries
+// the level as well as the colour.
+export function pointList(items) {
+  const icons = { good: 'check', warn: 'alert', info: 'info' };
+  return h('ul', { class: 'points' }, items.map((item) => h('li', { class: `point point-${item.level}` }, icon(icons[item.level] ?? 'info', 'icon-sm'), h('span', {}, item.text))));
+}
+
+// The table view of a chart, folded away under it. The first column is text, the rest are numbers.
+export function tableToggle(head, rows) {
+  return h('details', { class: 'table-toggle' }, h('summary', {}, 'Show as a table'),
+    h('div', { class: 'table-wrap' }, h('table', { class: 'table' },
+      h('thead', {}, h('tr', {}, head.map((text, i) => h('th', { class: i ? 'num' : '' }, text)))),
+      h('tbody', {}, rows.map((row) => h('tr', {}, row.map((text, i) => h('td', { class: i ? 'num' : '' }, text))))))));
 }
 
 export function card({ title, sub, action, cls = '' } = {}, ...body) {
@@ -151,7 +148,7 @@ export function confirmDialog({ title, message, confirm = 'Delete', danger = tru
   });
 }
 
-// The time frame shared by the Overview and Transactions, remembered on this device.
+// The time frame shared by every page that shows money, remembered on this device.
 const TIMEFRAME_KEY = 'budget-timeframe';
 
 export function loadTimeframe() {

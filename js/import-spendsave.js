@@ -82,9 +82,10 @@ export function importSpendSave(raw, state) {
   const transactions = [];
   const potMoves = new Map(); // pot id -> contributions
   const potIds = new Set(pots.map((p) => p.id));
-  const addMove = (pot, id, date, amount) => {
+  // month: set for money set aside from pay that counts in the next month, so it counts there too.
+  const addMove = (pot, id, date, amount, month = null) => {
     if (!potIds.has(pot) || !amount || !isNew(id)) return;
-    potMoves.set(pot, [...(potMoves.get(pot) ?? []), { id, date, amount, updatedAt: at }]);
+    potMoves.set(pot, [...(potMoves.get(pot) ?? []), { id, date, amount, updatedAt: at, ...(month ? { month } : {}) }]);
   };
 
   const months = Object.keys(raw.months).sort();
@@ -112,7 +113,8 @@ export function importSpendSave(raw, state) {
       if (isNew(`ss-${t.id}`)) {
         const source = kind === 'income' ? t.cat : t.label;
         const categoryId = map[kind][source] ?? (kind === 'expense' ? guessFromNote(t.note) : null) ?? fallback(kind);
-        transactions.push({ id: `ss-${t.id}`, date: t.d, kind, amount, categoryId, note: String(t.note ?? '').trim(), updatedAt: at, ...(forMonth ? { month: forMonth } : {}) });
+        // Income from Spend & Save was already split there (into its savings pots), so it isn't asked about again.
+        transactions.push({ id: `ss-${t.id}`, date: t.d, kind, amount, categoryId, note: String(t.note ?? '').trim(), updatedAt: at, ...(forMonth ? { month: forMonth } : {}), ...(kind === 'income' ? { split: 'kept' } : {}) });
       } else if (forMonth) {
         // Brought in before this was understood: mark it, unless it has been edited here since.
         const existing = state.transactions.find((r) => r.id === `ss-${t.id}`);
@@ -122,7 +124,7 @@ export function importSpendSave(raw, state) {
         }
       }
       // Income set aside into savings pots, and spending paid straight out of a pot.
-      if (kind === 'income') for (const [pot, value] of Object.entries(t.save ?? {})) addMove(pot, `ss-${t.id}-${pot}`, t.d, cents(value));
+      if (kind === 'income') for (const [pot, value] of Object.entries(t.save ?? {})) addMove(pot, `ss-${t.id}-${pot}`, t.d, cents(value), forMonth);
       if (kind === 'expense' && t.from && t.from !== 'spend') addMove(t.from, `ss-${t.id}-${t.from}`, t.d, -amount);
     }
   }

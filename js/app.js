@@ -1,4 +1,4 @@
-import { monthOf, todayISO } from './dates.js';
+import { todayISO } from './dates.js';
 import { demoState } from './demo.js';
 import { h, icon, toast } from './dom.js';
 import { formatMoney } from './money.js';
@@ -11,8 +11,9 @@ import { transactionDialog } from './tx.js';
 import { loadTimeframe } from './ui.js';
 import { renderBudgets } from './views/budgets.js';
 import { renderDashboard } from './views/dashboard.js';
-import { renderGoals } from './views/goals.js';
+import { renderInsights } from './views/insights.js';
 import { renderMore } from './views/more.js';
+import { renderPlan } from './views/plan.js';
 import { renderRecurring } from './views/recurring.js';
 import { renderReports } from './views/reports.js';
 import { renderSettings } from './views/settings.js';
@@ -22,17 +23,19 @@ import { renderTransactions } from './views/transactions.js';
 const NAV = [
   { route: 'dashboard', label: 'Overview', icon: 'home', render: renderDashboard },
   { route: 'transactions', label: 'Transactions', icon: 'list', render: renderTransactions },
+  { route: 'plan', label: 'Plan', icon: 'target', render: renderPlan },
+  { route: 'insights', label: 'Insights', icon: 'trend', render: renderInsights },
   { route: 'budgets', label: 'Budgets', icon: 'budget', render: renderBudgets },
-  { route: 'goals', label: 'Goals', icon: 'target', render: renderGoals },
   { route: 'recurring', label: 'Recurring', icon: 'repeat', render: renderRecurring },
   { route: 'reports', label: 'Reports', icon: 'chart', render: renderReports },
   { route: 'settings', label: 'Settings', icon: 'settings', render: renderSettings },
 ];
 const MORE = { route: 'more', label: 'More', icon: 'more', render: renderMore };
 const ROUTES = new Map([...NAV, MORE].map((item) => [item.route, item]));
+ROUTES.set('goals', ROUTES.get('plan')); // Savings goals moved into the Plan page; old links still work.
 // The phone's bottom bar has room for five; the rest live under More.
-const TABS = ['dashboard', 'transactions', 'budgets', 'reports', 'more'];
-const UNDER_MORE = new Set(['goals', 'recurring', 'settings', 'more']);
+const TABS = ['dashboard', 'transactions', 'plan', 'insights', 'more'];
+const UNDER_MORE = new Set(['budgets', 'recurring', 'reports', 'settings', 'more']);
 
 const demo = new URLSearchParams(location.search).has('demo');
 const store = createStore();
@@ -41,7 +44,7 @@ const ctx = {
   store,
   sync,
   demo,
-  ui: { month: monthOf(todayISO()), timeframe: loadTimeframe(), txFilter: { q: '', kind: 'all', category: 'all' }, lastCategory: {} },
+  ui: { timeframe: loadTimeframe(), txFilter: { q: '', kind: 'all', category: 'all' }, lastCategory: {} },
   currency: () => store.get().settings.currency,
   money: (cents, options) => formatMoney(cents, ctx.currency(), options),
   refresh: () => render(),

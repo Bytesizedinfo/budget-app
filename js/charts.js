@@ -10,6 +10,7 @@ export function hideTooltip() {
   const el = document.getElementById('tooltip');
   if (el) el.hidden = true;
   document.querySelectorAll('.col-group.active').forEach((g) => g.classList.remove('active'));
+  document.querySelectorAll('.cross.on').forEach((g) => g.classList.remove('on'));
 }
 
 // Values lead and labels follow; series are keyed with a short stroke of their colour.
@@ -48,20 +49,39 @@ function bindTooltip(el, show) {
 }
 
 // Ranked horizontal bars in one hue, value at the tip.
-// rows: [{ label, value, previous? }]; values are cents.
-export function barList(rows, { format, total, previousLabel }) {
+// rows: [{ label, value, previous? }]; values are cents. cls: the series colour (s1 income, s2 spending,
+// s3 set aside); of: what the shares are a share of.
+export function barList(rows, { format, total, previousLabel, cls = 's1', of = 'spending' }) {
   const max = Math.max(1, ...rows.map((r) => r.value));
   return h('div', { class: 'barlist' }, rows.map((row) => {
     const share = total ? percent.format(row.value / total) : '';
-    const bar = h('span', { class: 'barlist-bar s1', style: { width: `calc((100% - var(--barlist-value)) * ${row.value / max})` } });
-    const el = h('div', { class: 'barlist-row', tabindex: 0, 'aria-label': `${row.label}: ${format(row.value)}${share ? `, ${share} of spending` : ''}` },
+    const bar = h('span', { class: `barlist-bar ${cls}`, style: { width: `calc((100% - var(--barlist-value)) * ${row.value / max})` } });
+    const el = h('div', { class: 'barlist-row', tabindex: 0, 'aria-label': `${row.label}: ${format(row.value)}${share ? `, ${share} of ${of}` : ''}` },
       h('span', { class: 'barlist-label' }, row.label),
       h('span', { class: 'barlist-track' }, bar, h('span', { class: 'barlist-value' }, format(row.value))));
-    const details = [{ value: format(row.value), label: share ? `${share} of spending` : '' }];
+    const details = [{ value: format(row.value), label: share ? `${share} of ${of}` : '' }];
     if (row.previous !== undefined) details.push({ value: format(row.previous), label: previousLabel });
     bindTooltip(el, () => showTooltip(bar, row.label, details));
     return el;
   }));
+}
+
+// Redraws a chart to fit its container whenever the container's width changes.
+function fitToWidth(plot, draw) {
+  let drawnWidth = 0;
+  new ResizeObserver(([entry]) => {
+    const width = Math.floor(entry.contentRect.width);
+    if (width > 0 && width !== drawnWidth) {
+      drawnWidth = width;
+      plot.replaceChildren(draw(width));
+    }
+  }).observe(plot);
+}
+
+// The legend mirrors the mark: a block for bars, a short stroke for lines. One series needs none.
+function legend(series, mark = 'bar', always = false) {
+  if (series.length < 2 && !always) return null;
+  return h('div', { class: 'legend' }, series.map((s) => h('span', { class: 'legend-item' }, h('span', { class: `legend-swatch${mark === 'line' ? ' legend-line' : ''} ${s.cls}` }), s.name)));
 }
 
 function niceScale(maxValue, ticks = 4) {
@@ -81,17 +101,8 @@ function barPath(x, y, w, height) {
 // series: [{ name, cls }]. Redraws to fit its container's width.
 export function columnChart({ data, series, format, formatAxis, label, highlight = data.length - 1 }) {
   const plot = h('div', { class: 'chart-plot' });
-  const figure = h('figure', { class: 'chart', role: 'group', 'aria-label': label },
-    h('div', { class: 'legend' }, series.map((s) => h('span', { class: 'legend-item' }, h('span', { class: `legend-swatch ${s.cls}` }), s.name))),
-    plot);
-  let drawnWidth = 0;
-  new ResizeObserver(([entry]) => {
-    const width = Math.floor(entry.contentRect.width);
-    if (width > 0 && width !== drawnWidth) {
-      drawnWidth = width;
-      plot.replaceChildren(draw(width));
-    }
-  }).observe(plot);
+  const figure = h('figure', { class: 'chart', role: 'group', 'aria-label': label }, legend(series), plot);
+  fitToWidth(plot, draw);
   return figure;
 
   function draw(width) {
@@ -146,4 +157,132 @@ export function columnChart({ data, series, format, formatAxis, label, highlight
     });
     return root;
   }
+}
+
+// Lines over time on one axis that includes zero. points: [{ label, longLabel }]; series: [{ name, cls, values }],
+// where a series may stop early (a missing value draws nothing). The pointer finds the nearest position and
+// one tooltip lists every series there; the arrow keys do the same from the keyboard.
+export function lineChart({ points, series, format, formatAxis, label }) {
+  const plot = h('div', { class: 'chart-plot' });
+  const figure = h('figure', { class: 'chart', role: 'group', 'aria-label': label }, legend(series, 'line'), plot);
+  fitToWidth(plot, draw);
+  return figure;
+
+  function draw(width) {
+    const height = 220;
+    const pad = { top: 10, right: 12, bottom: 26, left: 52 };
+    const plotW = width - pad.left - pad.right;
+    const plotH = height - pad.top - pad.bottom;
+    const has = (v) => typeof v === 'number';
+    const all = series.flatMap((s) => s.values.filter(has));
+    const low = Math.min(0, ...all);
+    const high = Math.max(0, ...all);
+    const { step } = niceScale(Math.max(10000, high - low));
+    const min = Math.floor(low / step) * step;
+    const max = Math.max(min + step, Math.ceil(high / step) * step);
+    const n = points.length;
+    const x = (i) => pad.left + (n < 2 ? plotW / 2 : (i / (n - 1)) * plotW);
+    const y = (v) => pad.top + plotH - ((v - min) / (max - min)) * plotH;
+    const root = svg('svg', { class: 'chart-svg', width, height, viewBox: `0 0 ${width} ${height}` });
+
+    for (let value = min; value <= max + step / 2; value += step) {
+      const at = Math.round(y(value)) + 0.5;
+      root.append(
+        svg('line', { class: value === 0 ? 'axis-line' : 'grid-line', x1: pad.left, x2: width - pad.right, y1: at, y2: at }),
+        svg('text', { class: 'tick', x: pad.left - 8, y: at, 'text-anchor': 'end', 'dominant-baseline': 'middle' }, formatAxis(value)));
+    }
+    const labelEvery = Math.max(1, Math.ceil(44 / (plotW / Math.max(1, n - 1))));
+    points.forEach((p, i) => {
+      if (i % labelEvery === 0) root.append(svg('text', { class: 'tick', x: x(i), y: height - 8, 'text-anchor': 'middle' }, p.label));
+    });
+
+    for (const s of series) {
+      let d = '';
+      let last = -1;
+      s.values.forEach((v, i) => {
+        if (!has(v) || i >= n) return;
+        d += `${last === i - 1 && d ? 'L' : 'M'}${x(i).toFixed(1)},${y(v).toFixed(1)}`;
+        last = i;
+      });
+      if (!d) continue;
+      root.append(svg('path', { class: `line ${s.cls}`, d }));
+      root.append(svg('circle', { class: `dot ${s.cls}`, cx: x(last), cy: y(s.values[last]), r: 4 }));
+    }
+
+    // The crosshair and its dots, shown at the position nearest the pointer.
+    const hair = svg('line', { class: 'crosshair', y1: pad.top, y2: pad.top + plotH });
+    const dots = series.map((s) => svg('circle', { class: `dot ${s.cls}`, r: 4 }));
+    const cross = svg('g', { class: 'cross' }, hair, dots);
+    const lastIndex = Math.max(0, ...series.map((s) => Math.min(n, s.values.length) - 1));
+    let index = lastIndex;
+    const show = (i) => {
+      index = Math.max(0, Math.min(n - 1, i));
+      hideTooltip();
+      hair.setAttribute('x1', x(index));
+      hair.setAttribute('x2', x(index));
+      const rows = [];
+      series.forEach((s, k) => {
+        const v = s.values[index];
+        dots[k].style.display = has(v) ? '' : 'none';
+        if (!has(v)) return;
+        dots[k].setAttribute('cx', x(index));
+        dots[k].setAttribute('cy', y(v));
+        rows.push({ cls: s.cls, value: format(v), label: s.name });
+      });
+      cross.classList.add('on');
+      showTooltip(hair, points[index].longLabel, rows);
+    };
+    const fromPointer = (event) => {
+      const box = root.getBoundingClientRect();
+      show(n < 2 ? 0 : Math.round(((event.clientX - box.left - pad.left) / plotW) * (n - 1)));
+    };
+    const hit = svg('rect', {
+      class: 'col-hit',
+      x: pad.left - 6,
+      y: pad.top,
+      width: plotW + 12,
+      height: plotH + pad.bottom,
+      tabindex: 0,
+      role: 'img',
+      'aria-label': `${label}. ${series.map((s) => {
+        const values = s.values.filter(has);
+        return values.length ? `${s.name}: ${format(values[values.length - 1])} at the end` : `${s.name}: nothing yet`;
+      }).join('; ')}. Use the left and right arrow keys to read each point.`,
+    });
+    hit.dataset.tip = '';
+    hit.addEventListener('pointermove', fromPointer);
+    hit.addEventListener('pointerdown', fromPointer);
+    hit.addEventListener('pointerleave', (event) => {
+      if (event.pointerType !== 'touch') hideTooltip();
+    });
+    hit.addEventListener('focus', () => show(index));
+    hit.addEventListener('blur', hideTooltip);
+    hit.addEventListener('keydown', (event) => {
+      if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
+      event.preventDefault();
+      show(index + (event.key === 'ArrowLeft' ? -1 : 1));
+    });
+    root.append(cross, hit);
+    return root;
+  }
+}
+
+// One whole split into parts: a tall bar of blocks, each with its share printed on it where it fits.
+// parts: [{ name, value, cls }] in cents; a part at zero draws nothing. of: what the shares are a share of.
+export function segmentBar({ parts, format, label, of }) {
+  const shown = parts.filter((p) => p.value > 0);
+  const total = shown.reduce((sum, p) => sum + p.value, 0);
+  const share = (p) => percent.format(p.value / total);
+  const blocks = shown.map((p) => {
+    const text = h('span', { class: 'segbar-label' }, share(p));
+    const block = h('span', { class: `segbar-block ${p.cls}`, style: { flexGrow: p.value }, tabindex: 0, 'aria-label': `${p.name}: ${format(p.value)}, ${share(p)} of ${of}` }, text);
+    bindTooltip(block, () => showTooltip(block, p.name, [{ value: format(p.value), label: `${share(p)} of ${of}` }]));
+    return { block, text };
+  });
+  const bar = h('div', { class: 'segbar' }, blocks.map((b) => b.block));
+  // A block too narrow for its share prints none; the legend, the tooltip and the table still carry it.
+  new ResizeObserver(() => {
+    for (const { block, text } of blocks) text.style.visibility = block.clientWidth >= text.scrollWidth + 14 ? '' : 'hidden';
+  }).observe(bar);
+  return h('figure', { class: 'chart', role: 'group', 'aria-label': label }, legend(shown, 'bar', true), bar);
 }
