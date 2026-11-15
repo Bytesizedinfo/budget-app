@@ -2,7 +2,8 @@ import { budgetLevel, budgetSummary, inRange, rangeMonths, safeToSpend, sortCate
 import { formatMonthName, formatShortDate, monthOf, timeframe, timeframeText, todayISO } from '../dates.js';
 import { h, icon } from '../dom.js';
 import { centsToInput, parseAmount } from '../money.js';
-import { budgetRow, card, checkbox, confirmDialog, empty, field, meter, openDialog, segmented, timeframePicker, viewHead } from '../ui.js';
+import { monthPlan, suggestBudgets } from '../forecast.js';
+import { budgetRow, card, checkbox, confirmDialog, empty, field, meter, openDialog, segmented } from '../ui.js';
 
 const percent = new Intl.NumberFormat(undefined, { style: 'percent', maximumFractionDigits: 0 });
 
@@ -12,7 +13,8 @@ function scaleText(scale) {
   return scale < 1 ? `${percent.format(scale)} of a month` : `${Number(scale.toFixed(1))} months`;
 }
 
-export function renderBudgets(ctx) {
+// The Categories section of the Budget page.
+export function categoriesSection(ctx) {
   const state = ctx.store.get();
   const today = todayISO();
   // Spending follows the time frame, and each monthly budget is scaled to the same stretch.
@@ -25,11 +27,12 @@ export function renderBudgets(ctx) {
   const archived = sortCategories(state.categories.filter((c) => c.archived));
   const edit = (category) => () => categoryDialog(ctx, category);
 
-  return h('div', { class: 'view' },
-    viewHead(ctx, 'Budgets', {
-      actions: [timeframePicker(ctx), h('button', { type: 'button', class: 'btn', onclick: () => categoryDialog(ctx) }, icon('plus'), 'New category')],
-    }),
-    h('div', { class: 'stack' },
+  return h('div', { class: 'stack' },
+      h('div', { class: 'section-tools' },
+        h('p', { class: 'view-intro' }, 'A monthly amount for each kind of spending. Money you don’t spend in a category goes back to your spending money; it isn’t kept for the category next month.'),
+        h('div', { class: 'btn-row' },
+          h('button', { type: 'button', class: 'btn btn-primary', onclick: () => amountsDialog(ctx) }, icon('edit'), 'Set monthly amounts'),
+          h('button', { type: 'button', class: 'btn', onclick: () => categoryDialog(ctx) }, icon('plus'), 'New category'))),
       limitCard(ctx, monthOf(today)),
       summaryCard(ctx, summary, range, scaled),
       card({
@@ -56,8 +59,97 @@ export function renderBudgets(ctx) {
         ? card({ title: 'Archived', sub: 'Hidden when adding transactions. Past entries keep their category.', cls: 'card-list' },
           h('div', { class: 'row-list' }, archived.map((c) => h('button', { type: 'button', class: 'row-btn', onclick: edit(c) },
             h('span', { class: 'budget-top' }, h('span', { class: 'budget-name' }, c.name), h('span', { class: 'budget-left muted' }, c.kind === 'income' ? 'Income' : 'Spending'))))))
-        : null));
+        : null);
 }
+
+// "If I budget this much for each category, how much is left?": every spending category's monthly amount in
+// one place, with what's left of the month plan updating as you type, and amounts suggested from what you
+// actually spent.
+export function amountsDialog(ctx, month = monthOf(todayISO())) {
+  const state = ctx.store.get();
+  const currency = ctx.currency();
+  const today = todayISO();
+  const plan = monthPlan(state, month, today);
+  const before = plan.left + plan.categories.total; // What's left for categories once everything else is planned.
+  const suggested = suggestBudgets(state, today);
+  const categories = sortCategories(state.categories.filter((c) => c.kind === 'expense' && !c.archived));
+  // Payments already planned in each category count inside its amount.
+  const bills = new Map();
+  for (const o of [...plan.recurring.items, ...plan.planned.items]) bills.set(o.rule.categoryId, (bills.get(o.rule.categoryId) ?? 0) + o.rule.amount);
+  const total = h('b', {});
+  const left = h('b', {});
+  const leftRow = h('p', { class: 'split-keep amounts-left' }, h('span', {}, 'Left unbudgeted'), left);
+  const inputs = categories.map((c) => h('input', {
+    name: `budget-${c.id}`,
+    class: 'input amounts-input',
+    inputmode: 'decimal',
+    autocomplete: 'off',
+    placeholder: 'No budget',
+    'aria-label': `Monthly amount for ${c.name}`,
+    value: Number.isSafeInteger(c.monthlyBudget) ? centsToInput(c.monthlyBudget, currency) : '',
+  }));
+  const read = () => {
+    let sum = 0;
+    let extra = 0;
+    for (const [i, input] of inputs.entries()) {
+      const text = input.value.trim();
+      if (!text) continue;
+      const cents = parseAmount(text);
+      if (cents === null) return null;
+      sum += cents;
+      extra += Math.max(0, cents - (bills.get(categories[i].id) ?? 0));
+    }
+    return { sum, extra };
+  };
+  const update = () => {
+    const r = read();
+    if (!r) {
+      total.textContent = '–';
+      left.textContent = '–';
+      return;
+    }
+    total.textContent = ctx.money(r.sum);
+    const after = before - r.extra;
+    left.textContent = ctx.money(after);
+    leftRow.classList.toggle('bad', after < 0);
+  };
+  for (const input of inputs) input.addEventListener('input', update);
+  const suggest = () => {
+    for (const [i, c] of categories.entries()) {
+      const cents = suggested.get(c.id);
+      if (cents) inputs[i].value = centsToInput(cents, currency);
+    }
+    update();
+  };
+  openDialog({
+    title: 'Monthly amounts',
+    submitLabel: 'Save amounts',
+    content: h('div', { class: 'form-grid' },
+      h('p', { class: 'field-hint' }, `From ${ctx.money(plan.expected.amount)} expected income, after payments and set-asides, ${ctx.money(before)} is left for your categories. Payments already planned in a category count inside its amount.`),
+      suggested.size
+        ? h('button', { type: 'button', class: 'btn btn-sm amounts-suggest', onclick: suggest }, 'Suggest from my spending (average of the last 3 months)')
+        : null,
+      h('div', { class: 'amounts' }, categories.map((c, i) => h('label', { class: 'amounts-row' },
+        h('span', { class: 'amounts-name' }, c.name,
+          h('span', { class: 'split-sub' }, [suggested.get(c.id) ? `Usually ${ctx.money(suggested.get(c.id))}` : null, bills.get(c.id) ? `${ctx.money(bills.get(c.id))} of payments` : null].filter(Boolean).join(' · '))),
+        inputs[i]))),
+      h('p', { class: 'split-keep' }, h('span', {}, 'All categories'), total),
+      leftRow),
+    onSubmit() {
+      if (!read()) throw new Error('Enter each amount as a number, like 150 or 150.00, or leave it empty.');
+      const changed = [];
+      for (const [i, c] of categories.entries()) {
+        const text = inputs[i].value.trim();
+        const value = text ? parseAmount(text) : null;
+        if ((c.monthlyBudget ?? null) !== value) changed.push({ ...c, monthlyBudget: value });
+      }
+      if (changed.length) ctx.store.saveMany('categories', changed);
+      ctx.toast(changed.length ? 'Monthly amounts saved' : 'No changes');
+    },
+  });
+  update();
+}
+
 
 const needTag = (c) => (typeof c.need === 'boolean' ? h('span', { class: 'badge' }, c.need ? 'Need' : 'Want') : null);
 

@@ -5,8 +5,9 @@ import { importSpendSave } from '../js/import-spendsave.js';
 import { mergeStates } from '../js/merge.js';
 import { centsToInput, formatMoney, parseAmount } from '../js/money.js';
 import { bufferCheck, dateAfter, defaultSplit, planChecks, planSplit, plannedFor, presetSplit, rateInMonth, ratioOf, scheduleDue, setAsideIn, setAsideInMonth, sortedGoals, sourcesOf, suggestSplit, toSplit, tryPay, validSchedule } from '../js/pots.js';
-import { dueOccurrences, nextDate, occurrenceId, occurrenceIn, occurrencesBetween } from '../js/recurring.js';
-import { createStore, emptyState, parseState, seedState, serialize } from '../js/store.js';
+import { autoContributions, calendarDays, fundGoal, leftThisMonth, monthPlan, projectedOn, savedByNotBuying, simulate, suggestBudgets, timeline, wishInfo } from '../js/forecast.js';
+import { dueList, dueOccurrences, nextDate, nextOpen, occurrenceId, occurrenceIn, occurrenceTransaction, occurrences, occurrencesBetween, repeatWords, settledCount } from '../js/recurring.js';
+import { createStore, emptyState, normalize, parseState, SCHEMA, seedState, serialize } from '../js/store.js';
 import { createSync, decodeBase64, encodeBase64 } from '../js/sync.js';
 import { fakeGitHub } from './fake-github.js';
 
@@ -207,7 +208,7 @@ const limitState = (transactions) => {
   state.transactions = transactions;
   state.recurring = [
     rule({ id: 'phone', amount: 3000, startDate: '2026-11-20', categoryId: 'c_utilities' }),
-    rule({ id: 'gym', amount: 2000, startDate: '2026-09-05' }),
+    rule({ id: 'gym', amount: 2000, startDate: '2026-09-05', resumeDate: '2026-11-06' }),
     rule({ id: 'pay', kind: 'income', amount: 80000, startDate: '2026-11-25' }),
   ];
   return state;
@@ -664,7 +665,7 @@ test('spend per day comes from the money you have, less bills still to come', ()
   const state = seedState('SGD');
   state.transactions = [tx('i', '2026-11-01', 100000, { kind: 'income' }), tx('a', '2026-11-12', 2000), tx('old', '2026-11-02', 3000)];
   state.goals = [{ id: 'g', name: 'Trip', target: null, updatedAt: 1, contributions: [{ id: 'c', date: '2026-11-01', amount: 40000 }] }];
-  state.recurring = [rule({ id: 'phone', amount: 3000, startDate: '2026-11-20' }), rule({ id: 'gym', amount: 2000, startDate: '2026-11-05' })];
+  state.recurring = [rule({ id: 'phone', amount: 3000, startDate: '2026-11-20' }), rule({ id: 'gym', amount: 2000, startDate: '2026-11-05', resumeDate: '2026-11-06' })];
   const d = spendPerDay(state, '2026-11-12');
   assert.equal(d.spending, 100000 - 2000 - 3000 - 40000);
   assert.equal(d.reserved, 3000, 'only the phone bill is still to come this month');
@@ -1028,6 +1029,200 @@ test('needs and wants against the rule, from categories marked as one or the oth
   assert.deepEqual(n.target, { needs: 50000, wants: 30000, savings: 20000 });
   assert.deepEqual([n.setAside, n.sorted], [30000, true]);
   assert.equal(needsWants(seedState('SGD'), timeframe('month', '2026-11-12')).sorted, false);
+});
+
+
+// ---------- payments: schedules, confirming, money set aside for them ----------
+
+test('payments repeat daily, weekly, every N, twice a month, yearly or once', () => {
+  const none = emptyState();
+  const dates = (extra, to) => occurrences(none, rule({ startDate: '2026-11-10', ...extra }), to).map((o) => o.date);
+  assert.deepEqual(dates({ repeat: { every: 1, unit: 'day' } }, '2026-11-13'), ['2026-11-10', '2026-11-11', '2026-11-12', '2026-11-13']);
+  assert.deepEqual(dates({ repeat: { every: 2, unit: 'week' } }, '2026-12-10'), ['2026-11-10', '2026-11-24', '2026-12-08']);
+  assert.deepEqual(dates({ repeat: { every: 3, unit: 'month' }, startDate: '2026-11-30' }, '2027-06-01'), ['2026-11-30', '2027-02-28', '2027-05-30']);
+  assert.deepEqual(dates({ repeat: { every: 1, unit: 'year' }, startDate: '2024-02-29' }, '2026-12-31'), ['2024-02-29', '2025-02-28', '2026-02-28']);
+  assert.deepEqual(dates({ repeat: { twice: [15, 31] } }, '2026-12-31'), ['2026-11-15', '2026-11-30', '2026-12-15', '2026-12-31']);
+  assert.deepEqual(dates({ repeat: 'once' }, '2027-12-31'), ['2026-11-10']);
+  assert.deepEqual(dates({}, '2026-12-31'), ['2026-11-10', '2026-12-10'], 'a rule saved before repeats existed is monthly');
+  // Each occurrence has a fixed id, so two devices can't record it twice.
+  const ids = (extra) => occurrences(none, rule({ id: 'x', startDate: '2026-11-10', ...extra }), '2026-11-17').map((o) => o.id);
+  assert.deepEqual(ids({}), ['r_x_2026-11'], 'monthly ids are unchanged');
+  assert.deepEqual(ids({ repeat: { every: 1, unit: 'week' } }), ['r_x_2026-11-10', 'r_x_2026-11-17']);
+  assert.deepEqual(ids({ repeat: 'once' }), ['r_x_once']);
+  assert.deepEqual(ids({ repeat: { every: 1, unit: 'year' } }), ['r_x_2026']);
+  assert.deepEqual(ids({ repeat: { twice: [10, 15] } }), ['r_x_2026-11_1', 'r_x_2026-11_2']);
+  assert.deepEqual([repeatWords(rule()), repeatWords(rule({ repeat: { every: 2, unit: 'week' } })), repeatWords(rule({ repeat: 'once' }))], ['Monthly', 'Every 2 weeks', 'Once']);
+});
+
+test('each occurrence waits to be confirmed: paid, skipped, postponed, and ending after N times', () => {
+  const weekly = rule({ id: 'w', amount: 1000, startDate: '2026-11-02', repeat: { every: 1, unit: 'week' }, endAfter: 4 });
+  const state = { ...emptyState(), recurring: [weekly] };
+  assert.deepEqual(dueList(state, '2026-11-17').map((o) => o.date), ['2026-11-02', '2026-11-09', '2026-11-16']);
+  state.transactions = [occurrenceTransaction(dueList(state, '2026-11-17')[0], { amount: 1200 })]; // paid, with a changed amount
+  state.deleted = { [occurrenceId('w', '2026-11-09')]: 1 }; // skipped
+  state.recurring = [{ ...weekly, moved: { '2026-11-16': '2026-11-20' } }]; // postponed
+  assert.deepEqual(dueList(state, '2026-11-17'), [], 'nothing waits');
+  const all = occurrences(state, state.recurring[0], '2026-12-31');
+  assert.deepEqual(all.map((o) => [o.due, o.date, o.status]), [
+    ['2026-11-02', '2026-11-02', 'paid'], ['2026-11-09', '2026-11-09', 'skipped'], ['2026-11-16', '2026-11-20', 'open'], ['2026-11-23', '2026-11-23', 'open'],
+  ], 'four in all');
+  assert.equal(nextOpen(state, state.recurring[0], '2026-11-17').date, '2026-11-20');
+  assert.deepEqual(settledCount(state, weekly), { paid: 1, skipped: 1 });
+  assert.deepEqual([state.transactions[0].recurringId, state.transactions[0].amount, state.transactions[0].id], ['w', 1200, 'r_w_2026-11-02']);
+  assert.deepEqual(dueList({ ...state, recurring: [{ ...weekly, paused: true }] }, '2026-12-31'), [], 'nothing waits while paused');
+  // A one-off is finished once it's paid.
+  const once = rule({ id: 'o', startDate: '2026-11-15', repeat: 'once' });
+  const one = { ...emptyState(), recurring: [once] };
+  assert.equal(nextOpen(one, once, '2026-11-01').date, '2026-11-15');
+  one.transactions = dueOccurrences(one, '2026-11-15');
+  assert.equal(nextOpen(one, once, '2026-11-01'), null);
+});
+
+const feeState = (fund) => {
+  const state = seedState('SGD');
+  state.transactions = [tx('i', '2026-11-01', 100000, { kind: 'income' })];
+  state.recurring = [rule({ id: 'fee', name: 'Fee', amount: 12000, startDate: '2027-03-01', repeat: { every: 1, unit: 'year' }, fund })];
+  state.goals = [{ id: 'bill_fee', name: 'Fee', billId: 'fee', target: null, contributions: [], updatedAt: 1 }];
+  return state;
+};
+const moves = (state, today) => autoContributions(state, today).map((c) => [c.contribution.date, c.contribution.amount]);
+
+test('money is set aside for a payment: all on a date, an amount per period, or monthly until it is due', () => {
+  // All of it, ten days before.
+  let state = feeState({ type: 'date', daysBefore: 10, since: '2026-11-10' });
+  assert.equal(fundGoal(state, state.recurring[0]).id, 'bill_fee');
+  assert.deepEqual(autoContributions(state, '2027-02-18'), []);
+  assert.deepEqual(autoContributions(state, '2027-02-19').map((c) => [c.goalId, c.contribution.id, c.contribution.date, c.contribution.amount, c.contribution.auto]),
+    [['bill_fee', 'auto_bill_fee_2027', '2027-02-19', 12000, true]]);
+  // An amount every month, until there's enough.
+  state = feeState({ type: 'rate', amount: 3000, every: 1, unit: 'month', since: '2026-11-10' });
+  assert.deepEqual(moves(state, '2027-04-15'), [['2026-11-10', 3000], ['2026-12-10', 3000], ['2027-01-10', 3000], ['2027-02-10', 3000], ['2027-03-10', 0], ['2027-04-10', 0]]);
+  // Spread monthly until it's due.
+  state = feeState({ type: 'until', since: '2026-11-10' });
+  assert.deepEqual(moves(state, '2026-11-12'), [['2026-11-10', 3000]], 'four moves before 1 March');
+  // Recorded moves aren't repeated, and they come out of spending money.
+  const store = createStore(state);
+  store.addContributions(autoContributions(state, '2026-11-12'));
+  assert.deepEqual(autoContributions(store.get(), '2026-11-12'), []);
+  assert.equal(potBalance(store.get(), store.get().goals[0]), 3000);
+  assert.deepEqual(balance(store.get(), '2026-11-12'), { total: 100000, savings: 3000, spending: 97000 });
+  // By the due date it's all there, and paying uses it first.
+  const sim = simulate(store.get(), '2026-11-12', '2027-03-01');
+  const bill = sim.events.find((e) => e.type === 'bill');
+  assert.deepEqual([bill.fromFund, bill.amount, sim.end], [12000, 0, 88000]);
+  // A removed move stays removed.
+  store.removeContribution('bill_fee', 'auto_bill_fee_2026-11-10');
+  assert.deepEqual(autoContributions(store.get(), '2026-11-12'), []);
+  // Not enough spending money: the move is cut to what's there and marked short.
+  state = feeState({ type: 'date', daysBefore: 0, since: '2026-11-10' });
+  state.transactions.push(tx('big', '2026-11-02', 95000));
+  const short = autoContributions(state, '2027-03-01')[0].contribution;
+  assert.deepEqual([short.amount, short.short], [5000, 7000]);
+});
+
+const leftState = () => {
+  const state = seedState('SGD');
+  state.transactions = [tx('i', '2026-11-01', 100000, { kind: 'income' })];
+  state.recurring = [
+    rule({ id: 'phone', name: 'Phone', amount: 3000, startDate: '2026-11-20' }),
+    rule({ id: 'gift', name: 'Gift', amount: 5000, startDate: '2026-11-25', repeat: 'once', planned: true }),
+    rule({ id: 'pay', name: 'Pay', kind: 'income', amount: 50000, startDate: '2026-11-28' }),
+    rule({ id: 'dec', name: 'December', amount: 9000, startDate: '2026-12-02', repeat: 'once', planned: true }),
+  ];
+  state.goals = [
+    pot('trip', { auto: true, autoSince: '2026-11-10', schedule: { type: 'rate', amount: 1000, every: 1, unit: 'week' } }),
+    pot('pods', { target: 34900, wish: { tick: true }, contributions: [{ id: 'c', date: '2026-11-05', amount: 4900 }] }),
+  ];
+  const store = createStore(state);
+  store.addContributions(autoContributions(state, '2026-11-12')); // the 10 Nov move into "trip"
+  return store.get();
+};
+
+test('what would be left this month: payments, planned payments, automatic set-asides and ticked wishes', () => {
+  const state = leftState();
+  const today = '2026-11-12';
+  assert.equal(balance(state, today).spending, 100000 - 4900 - 1000);
+  const left = leftThisMonth(state, today);
+  assert.deepEqual(left.events.map((e) => [e.type, e.date, e.amount]), [['auto', '2026-11-17', -1000], ['bill', '2026-11-20', -3000], ['auto', '2026-11-24', -1000], ['bill', '2026-11-25', -5000]]);
+  assert.equal(left.end, 84100, 'income still to come is not counted');
+  assert.equal(leftThisMonth(state, today, { planned: false }).end, 89100, 'without planned payments');
+  assert.equal(leftThisMonth(state, today, { wishes: true }).end, 84100 - 30000, 'with the ticked wish');
+  const d = spendPerDay(state, today);
+  assert.deepEqual([d.spending, d.reserved, d.free, d.perDay], [94100, 10000, 84100, Math.floor(84100 / 19)]);
+  assert.equal(spendPerDay(state, today, { planned: false, wishes: true }).free, 59100);
+  // The timeline counts expected income, and finds the lowest point.
+  const line = timeline(state, today, 30);
+  assert.ok(line.events.some((e) => e.type === 'income' && e.amount === 50000));
+  assert.deepEqual(line.lowest, { amount: 84100, date: '2026-11-25' });
+  assert.equal(projectedOn(state, today, '2026-11-28'), 134100);
+  // An overdue payment still counts until it's confirmed or skipped.
+  assert.equal(leftThisMonth(state, '2026-11-22').events.find((e) => e.rule?.id === 'phone').date, '2026-11-22');
+});
+
+test('a set-aside funded automatically reaches its target by its date, and wishes know what buying leaves', () => {
+  const state = seedState('SGD');
+  state.transactions = [tx('i', '2026-11-01', 100000, { kind: 'income' })];
+  state.goals = [
+    pot('pods', { target: 34900, deadline: '2027-02-28', auto: true, autoSince: '2026-11-12', schedule: { type: 'target', within: null }, wish: { priority: 'must' } }),
+    pot('game', { target: 6000, wish: { dropped: '2026-11-01' } }),
+    pot('weekly', { target: 2500, auto: true, autoSince: '2026-11-01', schedule: { type: 'rate', amount: 1000, every: 1, unit: 'week' } }),
+  ];
+  assert.deepEqual(moves(state, '2026-12-12').filter(([date]) => date.endsWith('-12')), [['2026-11-12', 8725], ['2026-12-12', 8725]]);
+  assert.deepEqual(moves(state, '2026-11-22').filter(([date]) => !date.endsWith('-12')), [['2026-11-01', 1000], ['2026-11-08', 1000], ['2026-11-15', 500], ['2026-11-22', 0]], 'stops at its target');
+  const info = wishInfo(state, state.goals[0], '2026-11-12');
+  assert.deepEqual([info.remaining, info.ready, info.perMonth], [34900, '2027-02', 8725]);
+  assert.equal(info.leaves, 100000 - 2500 - 34900, 'buying it today, with its own set-asides stopped');
+  assert.equal(savedByNotBuying(state), 6000);
+  assert.deepEqual(sortedGoals(state).map((g) => g.id), ['pods', 'weekly'], 'a dropped wish is no longer offered');
+});
+
+test('the month plan: expected income minus payments, set-asides and category budgets', () => {
+  const state = seedState('SGD');
+  state.categories = state.categories.map((c) => (c.id === 'c_food' ? { ...c, monthlyBudget: 15000 } : c.id === 'c_housing' ? { ...c, monthlyBudget: 60000 } : c));
+  state.transactions = [tx('oct', '2026-10-05', 80000, { kind: 'income' }), tx('nov', '2026-11-03', 30000, { kind: 'income' })];
+  state.recurring = [
+    rule({ id: 'rent', amount: 50000, startDate: '2026-11-20' }),
+    rule({ id: 'gift', name: 'Gift', amount: 5000, startDate: '2026-11-25', repeat: 'once', planned: true, categoryId: 'c_shopping' }),
+  ];
+  state.goals = [pot('save', { plan: { type: 'percent', value: 10 } })];
+  const today = '2026-11-12';
+  let plan = monthPlan(state, '2026-11', today);
+  assert.deepEqual([plan.expected.amount, plan.expected.custom, plan.expected.soFar], [80000, false, 30000], 'expected income starts as what came in last month');
+  assert.deepEqual([plan.recurring.total, plan.planned.total, plan.covered, plan.setAsides.total, plan.categories.total], [50000, 5000, 0, 8000, 25000]);
+  assert.equal(plan.categories.items.find((b) => b.category.id === 'c_housing').extra, 10000, 'the rent is already inside the housing budget');
+  assert.deepEqual([plan.left, plan.perDay], [-8000, 0], 'over-planned');
+  state.settings.expected = { '2026-11': 100000 };
+  plan = monthPlan(state, '2026-11', today);
+  assert.deepEqual([plan.expected.custom, plan.setAsides.total, plan.left, plan.perDay], [true, 10000, 10000, Math.floor(10000 / 30)]);
+  assert.equal(monthPlan(state, '2026-12', today).left, 80000 - 50000 - 8000 - 25000, 'next month, from last month’s income');
+  // Money set aside for the rent is added back, so the rent isn't counted twice.
+  state.settings.expected = {};
+  state.recurring[0] = { ...state.recurring[0], fund: { type: 'until', since: '2026-11-12' } };
+  state.goals.push({ id: 'bill_rent', name: 'Rent', billId: 'rent', target: null, contributions: [], updatedAt: 1 });
+  plan = monthPlan(state, '2026-11', today);
+  assert.deepEqual([plan.setAsides.auto, plan.covered, plan.left], [50000, 50000, -8000]);
+});
+
+test('calendar days, budget suggestions, and files from the earlier version', () => {
+  const state = leftState();
+  state.transactions.push(tx('a', '2026-11-05', 1200), tx('b', '2026-11-05', 800), tx('oct', '2026-10-10', 9000), tx('sep', '2026-09-10', 3000, { categoryId: 'c_fun' }));
+  const days = calendarDays(state, '2026-11');
+  assert.equal(days.length, 30);
+  assert.deepEqual([days[0].income, days[4].expense, days[4].transactions.length], [100000, 2000, 2]);
+  assert.deepEqual(days[19].scheduled.map((o) => o.rule.id), ['phone']);
+  assert.deepEqual([...suggestBudgets(state, '2026-11-12')], [['c_food', 3000], ['c_fun', 1000]], 'the average of the last three full months, rounded up');
+  // A file saved by the earlier version still opens; one from a later version is refused.
+  const old = JSON.parse(serialize({ ...state, schema: 1 }));
+  assert.equal(old.schema, 1);
+  assert.equal(parseState(JSON.stringify(old)).schema, SCHEMA);
+  assert.equal(parseState(JSON.stringify(old)).recurring.length, 4);
+  let refused = false;
+  try {
+    normalize({ ...old, schema: SCHEMA + 1 });
+  } catch {
+    refused = true;
+  }
+  assert.ok(refused);
 });
 
 // ---------- runner ----------

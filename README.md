@@ -2,24 +2,35 @@
 
 A personal monthly budget that runs on GitHub Pages and keeps its data in a private GitHub repository.
 
-- Track income and expenses by category.
-- Pick the **time frame** on every page that shows money: today, this week, the last 7 or 30 days, this month, last month, this year, all time, or your own dates. Each device remembers its choice. Budgets scale each monthly budget to the range (S$300 a month is S$450 over 45 days).
-- **Split every income**: when income comes in, you're asked how much to set aside into each set-aside (a savings goal, a pot, or money kept for one kind of spending) and how much to keep for spending. The amounts are filled in from a default split.
-- **Plan** your set-asides: a default split for all income, and its own split (or keep it all) for each kind of income, with each set-aside getting a fixed amount a month, a percentage of the income, or what's due on its **saving schedule** (an amount every N days, weeks or months; reach the target by its date; or reach it within a length of time). Two presets: **Save for my goals** (each on its schedule) and the **50/30/20 rule** (adjustable; the savings share goes to goals on their schedules first, the rest to one set-aside). Mark spending categories as needs or wants to compare your spending with the rule. Try a pay amount before it arrives, compare planned with actually set aside, move money between set-asides, mark a safety buffer, and see whether each goal is on track for its date.
-- Pay for an expense **from a set-aside**, so it doesn't eat into your spending money. A set-aside meant for a category is pre-selected for expenses in that category.
-- **Insights**: what your spending and income say in plain words, with charts of money in and out, this month's spending pace (and when your spending money would run out), where your income went, spending by category and by day of the week, income by source, and your balance over time.
-- See **what you can spend per day** for the rest of the month, from the money you actually have (spending money minus bills still to come), next to Safe to spend.
-- Tap any Overview number (total balance, set aside, spending money, income, spent, net) to see **how it's worked out** and every entry behind it.
-- Pay that lands at the end of a month can **count in the next month** ("Counts in" when adding income). Spend & Save pay logged "for next month" imports the same way.
-- Set one overall monthly spending limit, bills included. The Overview then shows what's **safe to spend** today, this week and this month, with bills still to come set aside, and warns you when you're spending too fast.
-- See your **total balance**: everything recorded as income minus spending, split into what's set aside and what's left as spending money.
-- Optionally set monthly budgets per category too.
-- See reports of spending by category and income versus spending over 12 months.
-- Add recurring bills and income, which are recorded automatically each month.
-- Choose any common currency in Settings.
-- Switch between light and dark mode with the moon/sun button in the header. Each device remembers its own choice.
-- Import a backup from the Spend & Save app in **Settings → Import from Spend & Save**. It merges into what's already there, and importing the same file again adds nothing new.
-- Use it from any device. Changes sync through GitHub and work offline.
+Five places on a phone: **Home**, **Activity**, a **+** to add, **Budget** and **Upcoming**. Insights, Reports and Settings are in the menu at the top.
+
+**Home**
+- **To confirm**: payments and income whose day has come. Nothing is recorded by itself: mark each one **Paid** (with the real amount), **Skip** it, or **Postpone** it.
+- **What you'd have left this month**: your spending money minus everything still to come out of it this month (payments to confirm, money moving into set-asides), and what that means per day. Switches add **planned payments** and the **wishlist items you tick**. "How is this worked out?" lists every item.
+- Safe to spend against an optional monthly limit, your total balance (set aside and spending money), income, spending and net for the time frame, and what's coming up this week. Tap any number to see how it's worked out.
+
+**Activity**
+- Every transaction as a **list** (search, filters, CSV export) or a **calendar**: what came in and went out each day, dots on days with payments to come, and each day's details with an Add button.
+- **Quick add** with a big amount and a number keypad that works as a calculator (12.50 + 4), a grid of categories (most recent first), Today/Yesterday, note suggestions, and "Save & add another".
+
+**Budget**
+- **Month plan** for this month or next: expected income (what came in last month, or your own figure) minus recurring payments, planned payments, set-asides and category budgets = what's left unbudgeted, and per day. Over-planning is flagged. Every line opens its breakdown.
+- **Categories**: a monthly amount for each kind of spending, set together with what's left updating as you type, or **suggested from your average spending**. Mark each as a need or a want. Unspent money goes back to your spending money.
+- **Set-asides**: savings goals and pots, the default split for each kind of income (with the **Save for my goals** and **50/30/20** presets), saving schedules (an amount every N days, weeks or months; reach a target by a date or within a length of time), money set aside automatically or from income, moving money between set-asides, a safety buffer, and checks on whether each goal is on track.
+
+**Upcoming**
+- **Recurring payments** and **planned payments** (expense or income) that repeat once, daily, weekly, every 2 or 4 weeks, twice a month, monthly, every 3 or 6 months, yearly, or every N days/weeks/months/years; end never, on a date, or after N times ("3 of 12 paid").
+- **Set money aside for any payment**: all of it a number of days before, an amount every N days/weeks/months, or spread monthly until it's due. The payment is paid from that money.
+- The **next 60 days** with the spending money left after each item and the lowest point.
+- A **wishlist**: price, priority, link and note; saved up from income or automatically on a schedule; "ready around…", "buying it now would leave you…", a tick to count it on Home, Bought (paid from what was set aside), and a "saved by not buying" total.
+
+**Also**
+- **Split every income**: when income comes in you're asked how much to set aside and how much to keep, filled in from your default split.
+- The **time frame** (today, this week, the last 7 or 30 days, this month, last month, this year, all time, or your own dates) on every page that shows money. Budgets scale each monthly amount to the range.
+- Pay for an expense **from a set-aside**; a set-aside meant for a category is pre-selected for it.
+- **Insights**: plain-word findings and charts (money in and out, spending pace, where income went, categories, weekdays, income sources, balance over time). **Reports**: 12 months of income and spending.
+- Pay that lands at the end of a month can **count in the next month**.
+- Any common currency; light and dark mode; import from the Spend & Save app; use it from any device, synced through GitHub and working offline.
 
 ## How privacy works
 

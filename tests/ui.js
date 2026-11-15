@@ -39,9 +39,24 @@ function fill(dialog, name, value) {
 function submit(dialog) {
   dialog.querySelector('form').requestSubmit();
 }
+// Pages that moved: [the page now, the section of the Budget page, if any].
+const MOVED = { transactions: ['activity'], plan: ['budget', 'setasides'], goals: ['budget', 'setasides'], budgets: ['budget', 'categories'], recurring: ['upcoming'] };
 async function go(route) {
+  const [target, section] = MOVED[route] ?? [route];
   frame.contentWindow.location.hash = `#/${route}`;
-  await until(() => frame.contentDocument.querySelector('[aria-current="page"]')?.dataset.route === route, `${route} to render`);
+  await until(() => frame.contentDocument.querySelector('[aria-current="page"]')?.dataset.route === target, `${route} to render`);
+  if (section) await until(() => frame.contentDocument.querySelector('.section-tabs input:checked')?.value === section, `the ${section} section`);
+  if (route === 'transactions') {
+    // The list, not the calendar.
+    if (!frame.contentDocument.querySelector('#tx-search')) frame.contentDocument.querySelectorAll('.section-tabs input')[0]?.click();
+    await until(() => frame.contentDocument.querySelector('#tx-search'), 'the transaction list');
+  }
+}
+// The quick-add keypad picks a category with chips.
+function chooseCategory(dialog, id) {
+  const chip = dialog.querySelector(`[name="category"][value="${id}"]`);
+  expect(chip, `a ${id} chip`);
+  chip.click();
 }
 function button(label, root = doc()) {
   return [...root.querySelectorAll('button')].find((b) => b.textContent.trim() === label);
@@ -162,22 +177,69 @@ step('withdrawing more than saved is refused', async () => {
   await dialogClosed();
 });
 
-step('create a recurring item that back-fills past months', async () => {
-  await go('recurring');
-  button('New recurring item').click();
+const isoDay = (offset = 0) => {
+  const d = new Date();
+  d.setDate(d.getDate() + offset);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+};
+const confirmRow = (name) => $$('.to-confirm .due-row').find((r) => r.querySelector('.due-name').textContent === name);
+async function newPayment(planned, values, setup) {
+  button(planned ? 'New planned payment' : 'New recurring payment').click();
   const dialog = await openDialog();
-  const start = new Date();
-  start.setMonth(start.getMonth() - 2, 1);
-  const iso = `${start.getFullYear()}-${String(start.getMonth() + 1).padStart(2, '0')}-01`;
-  fill(dialog, 'name', 'UI check insurance');
-  fill(dialog, 'amount', '45');
-  fill(dialog, 'start', iso);
-  await until(() => dialog.querySelector('.field-hint').textContent.includes('3 past entries'), 'back-fill hint');
+  for (const [name, value] of Object.entries(values)) fill(dialog, name, value);
+  setup?.(dialog);
   submit(dialog);
   await dialogClosed();
-  await until(() => text('.tx-title').includes('UI check insurance'), 'rule listed');
+}
+
+step('a weekly payment waits on its day, and is recorded with the amount it really was', async () => {
+  await go('recurring');
+  await newPayment(false, { name: 'UI check gym', amount: '20', start: isoDay(0) }, (dialog) => {
+    const repeat = dialog.querySelector('[name="repeat"]');
+    repeat.value = 'week';
+    repeat.dispatchEvent(new Event('change'));
+  });
+  await until(() => $$('.recurring-card .tx-row').some((r) => r.textContent.includes('UI check gym') && r.textContent.includes('Weekly')), 'the payment listed as weekly');
+  const row = await until(() => confirmRow('UI check gym'), 'it waits to be confirmed today');
+  button('Paid', row).click();
+  const dialog = await openDialog();
+  fill(dialog, 'amount', '22');
+  submit(dialog);
+  await dialogClosed();
+  await until(() => !confirmRow('UI check gym'), 'no longer waiting');
   await go('transactions');
-  await until(() => text('.tx-title').includes('UI check insurance'), 'this month’s entry was added');
+  await until(() => $$('.tx-row').some((r) => r.textContent.includes('UI check gym') && r.textContent.includes('22.00')), 'recorded at 22');
+});
+
+step('a payment can be skipped or postponed', async () => {
+  await go('recurring');
+  await newPayment(false, { name: 'UI check daily', amount: '1', start: isoDay(0) }, (dialog) => {
+    const repeat = dialog.querySelector('[name="repeat"]');
+    repeat.value = 'day';
+    repeat.dispatchEvent(new Event('change'));
+  });
+  await newPayment(false, { name: 'UI check monthly', amount: '9', start: isoDay(0) });
+  button('Skip', await until(() => confirmRow('UI check daily'), 'the daily one waiting')).click();
+  let dialog = await openDialog();
+  submit(dialog);
+  await dialogClosed();
+  await until(() => !confirmRow('UI check daily'), 'skipped');
+  button('Postpone', await until(() => confirmRow('UI check monthly'), 'the monthly one waiting')).click();
+  dialog = await openDialog();
+  submit(dialog); // to tomorrow
+  await dialogClosed();
+  await until(() => !confirmRow('UI check monthly') && $$('.recurring-card .tx-row').some((r) => r.textContent.includes('UI check monthly') && r.textContent.includes('Next')), 'postponed to tomorrow');
+});
+
+step('a planned payment with money set aside for it ahead of time', async () => {
+  await newPayment(true, { name: 'UI check concert', amount: '80', start: isoDay(10) }, (dialog) => {
+    const fund = dialog.querySelector('[name="fund"]');
+    fund.value = 'date';
+    fund.dispatchEvent(new Event('change'));
+    // All of it today.
+  });
+  await until(() => $$('.planned-card .tx-row').some((r) => r.textContent.includes('UI check concert') && /80\.00 of .*80\.00 set aside/.test(r.textContent)), () => `set aside today (${$$('.planned-card .tx-row').map((r) => r.textContent).join(' / ')})`);
+  expect($$('.tl-row').some((r) => r.textContent.includes('UI check concert') && r.textContent.includes('from its set-aside')), 'the timeline pays it from what was set aside');
 });
 
 step('reports draw a 12-month chart with a table', async () => {
@@ -202,13 +264,14 @@ step('the overview leads with what is safe to spend, by period, and the total ba
   expect(/\d/.test($('.balance-value').textContent) && $('.balance-parts').textContent.includes('Set aside'), 'total balance shown');
 });
 
-step('spend per day sits next to safe to spend and explains itself', async () => {
-  const card = await until(() => $('.perday'), 'the spend-per-day card');
-  expect(/You can spend per day/.test(card.textContent) && /a day/.test($('.perday-value').textContent), card.textContent);
+step('what you’d have left sits next to safe to spend and explains itself', async () => {
+  const card = await until(() => $('.left-card'), 'the left card');
+  expect(/What you’d have left/.test(card.textContent) && /a day/.test($('.perday-perday').textContent), card.textContent);
   expect(card.parentElement.classList.contains('hero-row'), 'beside the safe-to-spend card');
+  expect($('[data-left="planned"]') && $('[data-left="wishes"]'), 'the planned and wishlist switches');
   button('How is this worked out?', card).click();
   const dialog = await openDialog();
-  expect(/shared over the/.test(dialog.textContent), dialog.textContent.slice(0, 200));
+  expect(/Shared over the/.test(dialog.textContent), dialog.textContent.slice(0, 200));
   button('Done', dialog).click();
   await dialogClosed();
 });
@@ -308,8 +371,8 @@ step('importing a Spend & Save backup adds its transactions and savings', async 
   await dialogClosed();
   await go('transactions');
   await until(() => text('.tx-title').includes('UI check import'), 'the imported transaction');
-  frame.contentWindow.location.hash = '#/goals'; // The old link opens the Plan page.
-  await until(() => $('[aria-current="page"]')?.dataset.route === 'plan', 'the old goals link to open Plan');
+  frame.contentWindow.location.hash = '#/goals'; // The old link opens the Budget page's set-asides.
+  await until(() => $('[aria-current="page"]')?.dataset.route === 'budget' && $('.section-tabs input:checked')?.value === 'setasides', 'the old goals link to open Set-asides');
   await until(() => $$('.goal-card').some((c) => c.textContent.includes('UI check trip') && c.textContent.includes('S$40.00 set aside')), 'the imported set-aside');
   expect(!$('.to-split') || !$('.to-split').textContent.includes('100.00'), 'imported income, already split in Spend & Save, isn’t asked about again');
 });
@@ -332,7 +395,7 @@ step('new income asks where it should go, filled in from the default split', asy
   let dialog = await openDialog();
   dialog.querySelectorAll('.segmented input')[1].click(); // Income
   fill(dialog, 'amount', '1000');
-  dialog.querySelector('[name="category"]').value = 'c_salary';
+  chooseCategory(dialog, 'c_salary');
   fill(dialog, 'note', 'UI check pay');
   submit(dialog);
   dialog = await until(() => $('dialog[open]')?.textContent.includes('Where should this go?') && $('dialog[open]'), 'the split dialog');
@@ -395,9 +458,7 @@ step('an expense in a set-aside’s category is paid from it, and the limit leav
   $('.btn-add').click();
   const dialog = await openDialog();
   fill(dialog, 'amount', '12');
-  const category = dialog.querySelector('[name="category"]');
-  category.value = 'c_shopping';
-  category.dispatchEvent(new Event('change'));
+  chooseCategory(dialog, 'c_shopping');
   await until(() => dialog.querySelector('[name="pot"]').value === 'demo-goal-gifts', 'Gifts pre-selected');
   fill(dialog, 'note', 'UI check present');
   submit(dialog);
@@ -426,7 +487,8 @@ step('the Plan page tries a pay amount and checks the plan', async () => {
   await until(() => /a day/.test($('.try-out').textContent) && $('.try-keep'), () => `the try result (${$('.try-out').textContent})`);
   const checks = $$('.card').find((c) => c.querySelector('.card-title')?.textContent === 'Checks on your plan');
   expect(checks && /safety buffer/.test(checks.textContent) && /months/.test(checks.textContent), checks?.textContent ?? 'no checks card');
-  expect($$('.plan-table tbody tr').length === $$('.goal-card').length, 'planned and set aside for every set-aside');
+  // Wishlist items are in the table too; their cards are on the Upcoming page.
+  expect($$('.plan-table tbody tr').length >= $$('.goal-card').length, 'planned and set aside for every set-aside');
 });
 
 step('Insights draws its charts and says what they mean', async () => {
@@ -461,7 +523,7 @@ step('every money page has the time frame, and Budgets scale to it', async () =>
   $('#timeframe-from').dispatchEvent(new Event('change', { bubbles: true }));
   await until(() => /monthly budgets scaled to 1\.\d months/.test(doc().body.textContent), 'budgets scaled to the range');
   await go('recurring');
-  await until(() => /Already added:/.test($('.range-card')?.textContent ?? ''), 'what recurring items added in the range');
+  await until(() => /Already recorded:/.test($('.range-card')?.textContent ?? ''), 'what recurring payments recorded in the range');
   pick('month');
   await until(() => $('#timeframe').value === 'month', 'back to this month');
 });
@@ -535,12 +597,100 @@ step('a spending category can be marked as a need or a want', async () => {
   await until(() => $$('.row-btn').some((row) => row.textContent.includes('Other') && row.textContent.includes('Want')), 'the want tag');
 });
 
-step('the phone bar has Plan and Insights, with Budgets and Reports under More', async () => {
+step('wishlist items save up like goals, show what buying leaves, and count on Home when ticked', async () => {
+  await go('recurring');
+  button('New wishlist item').click();
+  let dialog = await openDialog();
+  fill(dialog, 'name', 'UI check speaker');
+  fill(dialog, 'price', '60');
+  const sched = dialog.querySelector('[name="sched"]');
+  sched.value = 'rate';
+  sched.dispatchEvent(new Event('change'));
+  fill(dialog, 'sched-amount', '5');
+  fill(dialog, 'sched-every', '1');
+  dialog.querySelector('[name="sched-unit"]').value = 'week';
+  dialog.querySelector('[name="auto"]').click();
+  submit(dialog);
+  await dialogClosed();
+  const wish = () => $$('.wish-card').find((c) => c.querySelector('.wish-name').textContent === 'UI check speaker');
+  await until(() => wish() && /Automatically: .*5\.00 a week/.test(wish().textContent) && /Buying it now would leave you/.test(wish().textContent), () => `the wish card (${wish()?.textContent.slice(0, 240)})`);
+  await until(() => /5\.00 of .*60\.00/.test(wish().textContent), 'this week’s amount already moved in');
+  await go('dashboard');
+  const left = () => $('.left-card .perday-value').textContent;
+  const switchOn = $('[data-left="wishes"]');
+  if (!switchOn.checked) switchOn.click();
+  await until(() => $('[data-left="wishes"]').checked, 'the wishlist switch on');
+  const before = left();
+  await go('recurring');
+  wish().querySelector('.wish-tick input').click();
+  await go('dashboard');
+  await until(() => left() !== before, () => `ticking it lowers what’s left (${before} → ${left()})`);
+  $('[data-left="wishes"]').click(); // Back off.
+  await go('recurring');
+  button('Bought', wish()).click();
+  dialog = await openDialog();
+  submit(dialog);
+  await dialogClosed();
+  await until(() => !wish() && /Bought and dropped \(\d+\)/.test($('.wishlist').textContent), 'moved to the bought list');
+});
+
+step('the calendar shows each day, and adds on the day you pick', async () => {
+  await go('transactions');
+  $$('.section-tabs input')[1].click();
+  await until(() => $$('.cal-day').length >= 28, 'the month grid');
+  expect($$('.cal-day').some((d) => d.querySelector('.cal-out')), 'days show money out');
+  $(`.cal-day[data-date="${isoDay(0)}"]`).click();
+  await until(() => $('.day-card .card-title') && $(`.cal-day[data-date="${isoDay(0)}"]`).classList.contains('selected'), 'today’s details');
+  button('Add', $('.day-card')).click();
+  const dialog = await openDialog();
+  expect(dialog.querySelector('[name="date"]').value === isoDay(0), 'adds on that day');
+  button('Cancel', dialog).click();
+  await dialogClosed();
+  $$('.section-tabs input')[0].click(); // Back to the list.
+  await until(() => $('#tx-search'), 'the list again');
+});
+
+step('the month plan starts from expected income, and category amounts show what’s left as you type', async () => {
+  await go('dashboard');
+  frame.contentWindow.location.hash = '#/budget';
+  await until(() => $('[aria-current="page"]')?.dataset.route === 'budget', 'the Budget page');
+  $$('.section-tabs input')[0].click();
+  await until(() => $('.month-plan'), 'the month plan');
+  expect(/Expected income/.test($('.month-plan').textContent) && /Recurring payments/.test($('.month-plan').textContent) && /Left unbudgeted|Over-planned by/.test($('.month-plan').textContent), $('.month-plan').textContent.slice(0, 200));
+  $('.plan-income').click();
+  let dialog = await openDialog();
+  fill(dialog, 'expected', '9000');
+  submit(dialog);
+  await dialogClosed();
+  await until(() => /9,000\.00/.test($('.plan-income').textContent) && /Your figure/.test($('.plan-income').textContent), 'the expected income');
+  button('Category amounts').click();
+  dialog = await openDialog();
+  const left = () => dialog.querySelector('.amounts-left b').textContent;
+  const before = left();
+  fill(dialog, 'budget-c_fun', '250');
+  await until(() => left() !== before, 'what’s left updates as you type');
+  submit(dialog);
+  await dialogClosed();
+});
+
+step('the keypad adds sums like a calculator', async () => {
+  $('.btn-add').click();
+  const dialog = await openDialog();
+  for (const key of ['1', '2', 'Plus', '4']) [...dialog.querySelectorAll('.key')].find((k) => k.getAttribute('aria-label') === key).click();
+  await until(() => /16\.00/.test(dialog.querySelector('.keypad-result').textContent), 'shows the sum');
+  [...dialog.querySelectorAll('.key')].find((k) => k.getAttribute('aria-label') === 'Work out the sum').click();
+  expect(dialog.querySelector('[name="amount"]').value === '16.00', dialog.querySelector('[name="amount"]').value);
+  button('Cancel', dialog).click();
+  await dialogClosed();
+});
+
+step('the phone bar: Home, Activity, add, Budget, Upcoming; the rest in the menu', async () => {
   const tabs = $$('.tabbar .tab').map((a) => a.dataset.route);
-  expect(JSON.stringify(tabs) === JSON.stringify(['dashboard', 'transactions', 'plan', 'insights', 'more']), tabs.join(','));
+  expect(JSON.stringify(tabs) === JSON.stringify(['dashboard', 'activity', 'budget', 'upcoming']), tabs.join(','));
+  expect($('.tabbar .tab-add'), 'the add button in the middle');
   await go('more');
   const links = text('.list-link span');
-  expect(['Budgets', 'Recurring', 'Reports', 'Settings'].every((l) => links.includes(l)), links.join(','));
+  expect(['Insights', 'Reports', 'Settings'].every((l) => links.includes(l)), links.join(','));
 });
 
 step('the header toggle switches between light and dark', async () => {
@@ -595,7 +745,7 @@ step('a public repository is refused', async () => {
 step('connecting to a private repository creates the budget file', async () => {
   github.isPrivate = true;
   $('.setup-card form').requestSubmit();
-  await until(() => $('.view-title')?.textContent === 'Overview', 'the app to open');
+  await until(() => $('.view-title')?.textContent === 'Home', 'the app to open');
   expect(github.file, 'budget.json created');
   expect(github.state().categories.length > 5, 'seeded with categories');
   await until(() => pill() === 'Synced', () => `sync pill to say Synced (says "${pill()}")`);

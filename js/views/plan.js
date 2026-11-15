@@ -1,5 +1,6 @@
-// The Plan page: set-asides (savings goals and pots), the default split for each kind of income,
-// "try a pay amount", planned against actually set aside, and checks on the plan.
+// The Set-asides section of the Budget page: savings goals and pots, the default split for each kind of
+// income, "try a pay amount", planned against actually set aside, and checks on the plan. Wishlist items are
+// set-asides too, but they're shown on the Upcoming page.
 
 import { balance, categoriesFor, categoryName, goalProgress, inRange, potBalance, potEntries, sortCategories } from '../calc.js';
 import { barList } from '../charts.js';
@@ -7,45 +8,45 @@ import { formatDate, formatMonth, formatShortDate, isValidDate, timeframe, timef
 import { h, icon } from '../dom.js';
 import { centsToInput, parseAmount } from '../money.js';
 import { needsWants } from '../insights.js';
-import { defaultSplit, incomeMonths, planChecks, plannedFor, ratioOf, setAsideIn, sortedGoals, sourcesOf, tryPay, validSchedule } from '../pots.js';
+import { defaultSplit, incomeMonths, isWish, planChecks, plannedFor, ratioOf, setAsideIn, sortedGoals, sourcesOf, tryPay, validSchedule } from '../pots.js';
 import { defaultSplitDialog, markSplitUsed, ratioDialog, ratioText, ruleText, scheduleFields, scheduleText, splitWords, toSplitCard } from '../split.js';
 import { newId } from '../store.js';
-import { card, checkbox, confirmDialog, empty, field, meter, notice, openDialog, pointList, timeframePicker, viewHead } from '../ui.js';
+import { card, checkbox, confirmDialog, empty, field, meter, notice, openDialog, pointList } from '../ui.js';
 
 const percent = new Intl.NumberFormat(undefined, { style: 'percent', maximumFractionDigits: 0 });
 
-export function renderPlan(ctx) {
+export function setAsidesSection(ctx) {
   const state = ctx.store.get();
   const today = todayISO();
   const range = timeframe(ctx.ui.timeframe.choice, today, ctx.ui.timeframe);
+  // Every set-aside income can go into, in order. Wishlist items are in that order too, but shown on Upcoming.
   const goals = sortedGoals(state);
-  const newButton = h('button', { type: 'button', class: 'btn', onclick: () => goalDialog(ctx) }, icon('plus'), 'New set-aside');
-  const intro = h('p', { class: 'view-intro' }, 'Decide where your income goes. Each time money comes in, you’re asked how much to set aside and how much to keep, starting from the default splits below.');
+  const shown = goals.filter((g) => !isWish(g));
+  const tools = h('div', { class: 'section-tools' },
+    h('p', { class: 'view-intro' }, 'Money kept apart from your spending money. Each time income comes in, you’re asked how much to set aside, starting from the default splits below.'),
+    h('button', { type: 'button', class: 'btn', onclick: () => goalDialog(ctx) }, icon('plus'), 'New set-aside'));
 
   if (!goals.length) {
-    return h('div', { class: 'view' },
-      viewHead(ctx, 'Plan', { actions: [newButton] }),
-      intro,
+    return h('div', { class: 'stack' }, tools,
       card({}, empty('A set-aside is money kept apart from your spending money: a savings pot, a goal with a target, or money for one kind of spending. Add one to start splitting your income.',
         h('button', { type: 'button', class: 'btn btn-primary', onclick: () => goalDialog(ctx) }, icon('plus'), 'New set-aside'))));
   }
 
   const actual = setAsideIn(state, range);
-  return h('div', { class: 'view' },
-    viewHead(ctx, 'Plan', { actions: [timeframePicker(ctx), newButton] }),
-    intro,
-    h('div', { class: 'stack' },
-      toSplitCard(ctx),
-      h('div', { class: 'grid-2' }, totalCard(ctx, state, goals, today), defaultsCard(ctx, state)),
-      h('div', { class: 'goal-grid' }, goals.map((goal, index) => goalCard(ctx, state, goal, index, goals, today, range, actual))),
-      h('div', { class: 'grid-2' }, tryCard(ctx, state, today), plannedCard(ctx, state, goals, range, actual)),
-      h('div', { class: 'grid-2' }, checksCard(ctx, state, today), ratioCard(ctx, state, range))));
+  return h('div', { class: 'stack' },
+    tools,
+    toSplitCard(ctx),
+    h('div', { class: 'grid-2' }, totalCard(ctx, state, today), defaultsCard(ctx, state)),
+    shown.length ? h('div', { class: 'goal-grid' }, shown.map((goal) => goalCard(ctx, state, goal, goals.indexOf(goal), goals, today, range, actual))) : null,
+    h('div', { class: 'grid-2' }, tryCard(ctx, state, today), plannedCard(ctx, state, goals, range, actual)),
+    h('div', { class: 'grid-2' }, checksCard(ctx, state, today), ratioCard(ctx, state, range)));
 }
 
-// How much is set aside in total, and where it sits.
-function totalCard(ctx, state, goals, today) {
+// How much is set aside in total, and where it sits: goals, wishlist items and money held for payments.
+function totalCard(ctx, state, today) {
   const b = balance(state, today);
-  const rows = goals.map((goal) => ({ label: goal.name, value: Math.max(0, potBalance(state, goal, today)) })).filter((r) => r.value > 0).sort((a, b2) => b2.value - a.value);
+  const label = (goal) => (goal.billId ? `${goal.name} (payment)` : isWish(goal) ? `${goal.name} (wishlist)` : goal.name);
+  const rows = state.goals.map((goal) => ({ label: label(goal), value: Math.max(0, potBalance(state, goal, today)) })).filter((r) => r.value > 0).sort((a, b2) => b2.value - a.value);
   return card({ title: 'Set aside', sub: 'Where your set-aside money sits, as of today', cls: 'plan-total' },
     h('p', { class: 'plan-total-value' }, ctx.money(b.savings)),
     h('p', { class: 'hero-sub' }, `${ctx.money(b.spending)} spending money · ${ctx.money(b.total)} in total`),
@@ -283,7 +284,7 @@ function ratioCard(ctx, state, range) {
 
 // ---------- Dialogs ----------
 
-function contributionDialog(ctx, goal, sign) {
+export function contributionDialog(ctx, goal, sign) {
   const state = ctx.store.get();
   const saved = potBalance(state, goal);
   const spending = balance(state, todayISO()).spending;
@@ -332,7 +333,7 @@ function moveDialog(ctx, goal) {
   });
 }
 
-function goalDialog(ctx, goal = null) {
+export function goalDialog(ctx, goal = null) {
   const state = ctx.store.get();
   const currency = ctx.currency();
   const nameOf = (id) => state.goals.find((g) => g.id === id)?.name ?? 'a deleted set-aside';

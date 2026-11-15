@@ -2,7 +2,9 @@
 // stamps records with updatedAt and leaves a tombstone in `deleted` when something is removed,
 // so two devices' copies can be merged record by record (see merge.js).
 
-export const SCHEMA = 1;
+// 2: payments can repeat daily, weekly, yearly or on a custom schedule, and wait to be confirmed. A copy of
+// the app that only knows version 1 would read those as monthly, so it's told to reload instead.
+export const SCHEMA = 2;
 
 const SEED_CATEGORIES = [
   ['c_food', 'Food & drink', 'expense'],
@@ -116,6 +118,22 @@ export function createStore(initial = emptyState()) {
     },
     remove(collection, id) {
       commit({ ...state, [collection]: state[collection].filter((r) => r.id !== id), deleted: { ...state.deleted, [id]: stamp() } }, 'local');
+    },
+    // Leaves a tombstone under an id without removing anything, e.g. to skip one occurrence of a payment.
+    tombstone(id) {
+      commit({ ...state, deleted: { ...state.deleted, [id]: stamp() } }, 'local');
+    },
+    // Adds ready-made contributions (with their own fixed ids) to several set-asides in one change.
+    // list: [{ goalId, contribution }]. Ones already there, or deleted, are left alone.
+    addContributions(list) {
+      const fresh = list.filter(({ goalId, contribution }) => !(contribution.id in state.deleted)
+        && state.goals.some((g) => g.id === goalId && !g.contributions.some((c) => c.id === contribution.id)));
+      if (!fresh.length) return;
+      const goals = state.goals.map((g) => {
+        const mine = fresh.filter((f) => f.goalId === g.id).map((f) => ({ ...f.contribution, updatedAt: stamp() }));
+        return mine.length ? { ...g, contributions: [...g.contributions, ...mine], updatedAt: stamp() } : g;
+      });
+      commit({ ...state, goals }, 'local');
     },
     setSettings(patch) {
       commit({ ...state, settings: { ...state.settings, ...patch, updatedAt: stamp() } }, 'local');

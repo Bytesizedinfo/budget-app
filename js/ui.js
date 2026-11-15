@@ -148,6 +148,25 @@ export function confirmDialog({ title, message, confirm = 'Delete', danger = tru
   });
 }
 
+// Small choices remembered on this device (which section was open, which switches are on).
+export function remembered(key, fallback) {
+  try {
+    const saved = JSON.parse(localStorage.getItem(key) || 'null');
+    if (saved !== null && typeof saved === typeof fallback) return typeof fallback === 'object' ? { ...fallback, ...saved } : saved;
+  } catch {
+    // Storage can be blocked; use the fallback.
+  }
+  return fallback;
+}
+
+export function remember(key, value) {
+  try {
+    localStorage.setItem(key, JSON.stringify(value));
+  } catch {
+    // Not remembered on this device, but still applied.
+  }
+}
+
 // The time frame shared by every page that shows money, remembered on this device.
 const TIMEFRAME_KEY = 'budget-timeframe';
 

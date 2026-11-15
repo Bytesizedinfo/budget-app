@@ -2,7 +2,7 @@
 // back to the last cached copy of the app when offline. GitHub API calls are never cached.
 // Bump CACHE when files are added or renamed.
 
-const CACHE = 'budget-v6';
+const CACHE = 'budget-v7';
 const APP_FILES = [
   './',
   'index.html',
@@ -17,8 +17,11 @@ const APP_FILES = [
   'js/dates.js',
   'js/demo.js',
   'js/dom.js',
+  'js/due.js',
+  'js/forecast.js',
   'js/import-spendsave.js',
   'js/insights.js',
+  'js/keypad.js',
   'js/merge.js',
   'js/money.js',
   'js/pots.js',
@@ -30,16 +33,18 @@ const APP_FILES = [
   'js/theme.js',
   'js/tx.js',
   'js/ui.js',
+  'js/views/activity.js',
+  'js/views/budget.js',
   'js/views/budgets.js',
   'js/views/dashboard.js',
   'js/views/insights.js',
   'js/views/more.js',
   'js/views/plan.js',
-  'js/views/recurring.js',
   'js/views/reports.js',
   'js/views/settings.js',
   'js/views/setup.js',
   'js/views/transactions.js',
+  'js/views/upcoming.js',
 ];
 
 self.addEventListener('install', (event) => {

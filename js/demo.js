@@ -1,7 +1,8 @@
 // Sample data for ?demo, so the app can be tried without connecting GitHub. Never saved.
 
-import { addMonths, dateInMonth, daysInMonth, monthOf, monthRange } from './dates.js';
+import { addDays, addMonths, dateInMonth, daysInMonth, monthOf, monthRange } from './dates.js';
 import { fractionDigits, guessCurrency } from './money.js';
+import { dueOccurrences } from './recurring.js';
 import { seedState } from './store.js';
 
 // Seeded random numbers, so the demo looks the same on every visit.
@@ -37,6 +38,9 @@ export function demoState(today) {
     rule('demo-gym', 'Gym membership', 'expense', 8900, 'c_health', 5),
     rule('demo-phone', 'Phone plan', 'expense', 3800, 'c_utilities', 12),
     rule('demo-stream', 'Streaming', 'expense', 1598, 'c_fun', 18),
+    { ...rule('demo-lunch', 'Lunch allowance', 'expense', 3500, 'c_food', 1), repeat: { every: 1, unit: 'week' }, startDate: addDays(today, -1) },
+    { ...rule('demo-insurance', 'Travel insurance', 'expense', 12000, 'c_other', 1), repeat: { every: 1, unit: 'year' }, startDate: dateInMonth(addMonths(monthOf(today), 3), 10), fund: { type: 'until', since: dateInMonth(monthOf(today), 1) } },
+    { ...rule('demo-dinner', 'Birthday dinner', 'expense', 6000, 'c_fun', 1), repeat: 'once', planned: true, startDate: addDays(today, 6) },
   ];
 
   const transactions = [];
@@ -56,7 +60,8 @@ export function demoState(today) {
       if (random() < 0.02) add(date, 'c_other_income', amount(40, 300), pick(['Sold old bike', 'Cashback', 'Freelance job']), 'income');
     }
   }
-  state.transactions = transactions;
+  // Payments up to yesterday were confirmed as they came; today's (if any) is waiting on the home page.
+  state.transactions = [...transactions, ...dueOccurrences({ ...state, transactions }, addDays(today, -1)).map((t) => ({ ...t, updatedAt: 1 }))];
 
   const monthly = (prefix, cents, day) =>
     monthRange(first, addMonths(monthOf(today), -1)).map((month, i) => ({ id: `${prefix}-${i}`, date: dateInMonth(month, day), amount: cents, updatedAt: 1 }));
@@ -64,7 +69,7 @@ export function demoState(today) {
     {
       id: 'demo-goal-emergency', name: 'Emergency fund', target: 1500000, deadline: null, updatedAt: 1,
       plan: { type: 'percent', value: 10 }, buffer: true,
-      contributions: [{ id: 'demo-ef-start', date: start(1), amount: 450000, updatedAt: 1 }, ...monthly('demo-ef', 50000, 26)],
+      contributions: [{ id: 'demo-ef-start', date: start(1), amount: 150000, updatedAt: 1 }, ...monthly('demo-ef', 50000, 26)],
     },
     {
       id: 'demo-goal-trip', name: 'Trip to Japan', target: 400000, deadline: dateInMonth(addMonths(monthOf(today), 5), 15), updatedAt: 1,
@@ -76,6 +81,18 @@ export function demoState(today) {
       contributions: monthly('demo-gifts', 6000, 27),
     },
   ];
+  state.goals.push(
+    { id: 'demo-fund-insurance', name: 'Travel insurance', billId: 'demo-insurance', target: null, deadline: null, updatedAt: 1, contributions: [] },
+    {
+      id: 'demo-wish-headphones', name: 'Noise-cancelling headphones', target: 32900, deadline: null, updatedAt: 1, auto: true, autoSince: dateInMonth(monthOf(today), 1),
+      schedule: { type: 'rate', amount: 2500, every: 1, unit: 'week', since: dateInMonth(monthOf(today), 1) },
+      wish: { priority: 'must', since: addDays(today, -20), tick: false, link: '', note: '' }, contributions: [{ id: 'demo-wish-h1', date: addDays(today, -20), amount: 5000, updatedAt: 1 }],
+    },
+    {
+      id: 'demo-wish-camera', name: 'Instant camera', target: 11900, deadline: null, updatedAt: 1,
+      wish: { priority: 'nice', since: addDays(today, -4), tick: false, link: '', note: 'The mint one' }, contributions: [],
+    },
+  );
   // Presents are paid from the Gifts set-aside rather than from spending money.
   state.transactions = state.transactions.map((t) => (t.note === 'Gift for Sam' && t.amount <= 6000 ? { ...t, potId: 'demo-goal-gifts' } : t));
   return state;

@@ -4,11 +4,17 @@ import { categoriesFor, categoryName, monthKey, potBalance, safeToSpend, splitOf
 import { addMonths, formatDay, formatMonthName, isValidDate, monthOf, todayISO } from './dates.js';
 import { h, icon } from './dom.js';
 import { centsToInput, parseAmount } from './money.js';
+import { quickAdd } from './keypad.js';
 import { sortedGoals } from './pots.js';
 import { splitDialog } from './split.js';
 import { field, initialBadge, openDialog, segmented, signedAmount } from './ui.js';
 
+// Editing a transaction. Adding a new one opens the quick-add keypad instead.
 export function transactionDialog(ctx, tx = null) {
+  if (!tx) {
+    quickAdd(ctx);
+    return;
+  }
   const state = ctx.store.get();
   const currency = ctx.currency();
   const pots = sortedGoals(state);
@@ -138,7 +144,7 @@ export function transactionDialog(ctx, tx = null) {
 }
 
 // After a new expense this month, say where that leaves the monthly limit.
-function limitNote(ctx, date) {
+export function limitNote(ctx, date) {
   const today = todayISO();
   if (monthOf(date) !== monthOf(today)) return '';
   const safe = safeToSpend(ctx.store.get(), monthOf(today), today);

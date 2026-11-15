@@ -5,13 +5,26 @@
 import { byNewest, monthKey, potBalance, potEntries, spendPerDay, splitOf, trend } from './calc.js';
 import { addDays, addMonths, dateInMonth, dayOf, daysInMonth, isValidDate, monthOf, monthRange } from './dates.js';
 
-// Set-asides in priority order: the order chosen on the Plan page, then the order they were made in.
+// A set-aside can also be a wishlist item (`wish` on the goal: its target is the price) or the money held for
+// one payment (`billId`: the payment it belongs to). Money for payments is managed from the payment itself,
+// and a wish that has been bought or dropped is finished, so neither is offered when income is split.
+export const isBillFund = (goal) => typeof goal.billId === 'string';
+export const isWish = (goal) => goal.wish !== null && typeof goal.wish === 'object';
+// A wish is closed once it has been bought or dropped from the list.
+export const isClosed = (goal) => isWish(goal) && (!!goal.wish.boughtTxId || !!goal.wish.dropped);
+
+// Set-asides that income can be split into, in priority order: the order chosen on the Budget page, then the
+// order they were made in.
 export function sortedGoals(state) {
   return state.goals
     .map((goal, index) => ({ goal, key: Number.isFinite(goal.order) ? goal.order : 1e6 + index }))
+    .filter((x) => !isBillFund(x.goal) && !isClosed(x.goal))
     .sort((a, b) => a.key - b.key)
     .map((x) => x.goal);
 }
+
+// A set-aside funded automatically: its schedule's amount moves out of spending money by itself.
+export const isAuto = (goal) => goal.auto === true && !isBillFund(goal) && !isClosed(goal) && validSchedule(goal) !== null;
 
 // ---------- Saving schedules ----------
 // A set-aside can have a saving schedule (`schedule` on the goal):
@@ -57,11 +70,12 @@ export function rateInMonth(schedule, month) {
 // What a set-aside's schedule asks for in a month. For a target, that's what was still missing at the start of
 // the month, shared over the months left to its date (all of it once the date has passed), so putting money in
 // during the month doesn't change the month's amount.
-export function scheduleDue(state, goal, month) {
+// extraBefore: money a forecast expects to have gone in before the month, on top of what's recorded.
+export function scheduleDue(state, goal, month, extraBefore = 0) {
   const s = validSchedule(goal);
   if (!s) return 0;
   if (s.type === 'rate') return rateInMonth(s, month);
-  const before = potEntries(state, goal).filter((e) => e.month < month).reduce((sum, e) => sum + e.amount, 0);
+  const before = extraBefore + potEntries(state, goal).filter((e) => e.month < month).reduce((sum, e) => sum + e.amount, 0);
   const remaining = Math.max(0, goal.target - before);
   if (!remaining) return 0;
   const last = monthOf(goal.deadline);
@@ -320,6 +334,6 @@ export function incomeMonths(state, today) {
 // splitting was first used so older income isn't brought up.
 export function toSplit(state) {
   const since = state.settings.splitSince;
-  if (!since || !state.goals.length) return [];
+  if (!since || !sortedGoals(state).length) return [];
   return state.transactions.filter((t) => t.kind === 'income' && !t.split && typeof t.date === 'string' && t.date >= since).sort(byNewest);
 }

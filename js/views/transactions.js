@@ -3,9 +3,11 @@ import { transactionsCsv } from '../csv.js';
 import { formatDay, timeframe, timeframeText, todayISO } from '../dates.js';
 import { download, h, icon } from '../dom.js';
 import { transactionDialog, txRow } from '../tx.js';
-import { card, empty, timeframePicker, viewHead } from '../ui.js';
+import { card, empty } from '../ui.js';
 
-export function renderTransactions(ctx) {
+// The List view of the Activity page: every transaction in the time frame, with search and filters.
+// Returns the page's extra header actions and its body.
+export function transactionList(ctx) {
   const state = ctx.store.get();
   const filter = ctx.ui.txFilter;
   // The time frame is picked at the top and shared with the Overview (Today … All time, or custom dates).
@@ -79,15 +81,10 @@ export function renderTransactions(ctx) {
   if (category.value === 'all') filter.category = 'all';
 
   update();
-  return h('div', { class: 'view' },
-    viewHead(ctx, 'Transactions', {
-      actions: [
-        timeframePicker(ctx),
-        h('button', { type: 'button', class: 'btn', onclick: () => download(`budget-transactions-${todayISO()}.csv`, transactionsCsv(state, rangeTransactions), 'text/csv') }, icon('download'), 'Export CSV'),
-      ],
-    }),
-    h('div', { class: 'filters' }, h('div', { class: 'search' }, icon('search'), search), kind, category),
-    card({ cls: 'card-list' }, summary, list));
+  return {
+    actions: [h('button', { type: 'button', class: 'btn', onclick: () => download(`budget-transactions-${todayISO()}.csv`, transactionsCsv(state, rangeTransactions), 'text/csv') }, icon('download'), 'Export CSV')],
+    body: [h('div', { class: 'filters' }, h('div', { class: 'search' }, icon('search'), search), kind, category), card({ cls: 'card-list' }, summary, list)],
+  };
 }
 
 function dayLabel(date, today) {

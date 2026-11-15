@@ -1,41 +1,46 @@
 import { todayISO } from './dates.js';
 import { demoState } from './demo.js';
 import { h, icon, toast } from './dom.js';
+import { autoContributions } from './forecast.js';
+import { quickAdd } from './keypad.js';
 import { formatMoney } from './money.js';
-import { dueOccurrences } from './recurring.js';
 import { createStore } from './store.js';
 import { createSync } from './sync.js';
 import { syncPill } from './syncui.js';
 import { applyTheme, isDark, onThemeChange, readTheme, saveTheme } from './theme.js';
-import { transactionDialog } from './tx.js';
-import { loadTimeframe } from './ui.js';
-import { renderBudgets } from './views/budgets.js';
+import { loadTimeframe, remembered } from './ui.js';
+import { renderActivity } from './views/activity.js';
+import { renderBudget } from './views/budget.js';
 import { renderDashboard } from './views/dashboard.js';
 import { renderInsights } from './views/insights.js';
 import { renderMore } from './views/more.js';
-import { renderPlan } from './views/plan.js';
-import { renderRecurring } from './views/recurring.js';
 import { renderReports } from './views/reports.js';
 import { renderSettings } from './views/settings.js';
 import { renderSetup } from './views/setup.js';
-import { renderTransactions } from './views/transactions.js';
+import { renderUpcoming } from './views/upcoming.js';
 
 const NAV = [
-  { route: 'dashboard', label: 'Overview', icon: 'home', render: renderDashboard },
-  { route: 'transactions', label: 'Transactions', icon: 'list', render: renderTransactions },
-  { route: 'plan', label: 'Plan', icon: 'target', render: renderPlan },
+  { route: 'dashboard', label: 'Home', icon: 'home', render: renderDashboard },
+  { route: 'activity', label: 'Activity', icon: 'list', render: renderActivity },
+  { route: 'budget', label: 'Budget', icon: 'budget', render: renderBudget },
+  { route: 'upcoming', label: 'Upcoming', icon: 'repeat', render: renderUpcoming },
   { route: 'insights', label: 'Insights', icon: 'trend', render: renderInsights },
-  { route: 'budgets', label: 'Budgets', icon: 'budget', render: renderBudgets },
-  { route: 'recurring', label: 'Recurring', icon: 'repeat', render: renderRecurring },
   { route: 'reports', label: 'Reports', icon: 'chart', render: renderReports },
   { route: 'settings', label: 'Settings', icon: 'settings', render: renderSettings },
 ];
 const MORE = { route: 'more', label: 'More', icon: 'more', render: renderMore };
 const ROUTES = new Map([...NAV, MORE].map((item) => [item.route, item]));
-ROUTES.set('goals', ROUTES.get('plan')); // Savings goals moved into the Plan page; old links still work.
-// The phone's bottom bar has room for five; the rest live under More.
-const TABS = ['dashboard', 'transactions', 'plan', 'insights', 'more'];
-const UNDER_MORE = new Set(['budgets', 'recurring', 'reports', 'settings', 'more']);
+// Links from before these pages were merged still work: [page, the section of it to open].
+const OLD_LINKS = {
+  transactions: ['activity', null],
+  plan: ['budget', 'setasides'],
+  goals: ['budget', 'setasides'],
+  budgets: ['budget', 'categories'],
+  recurring: ['upcoming', null],
+};
+// The phone's bottom bar: two pages either side of the add button. The rest sit behind the menu in the top bar.
+const TABS = ['dashboard', 'activity', null, 'budget', 'upcoming'];
+const UNDER_MORE = new Set(['insights', 'reports', 'settings', 'more']);
 
 const demo = new URLSearchParams(location.search).has('demo');
 const store = createStore();
@@ -44,7 +49,13 @@ const ctx = {
   store,
   sync,
   demo,
-  ui: { timeframe: loadTimeframe(), txFilter: { q: '', kind: 'all', category: 'all' }, lastCategory: {} },
+  ui: {
+    timeframe: loadTimeframe(),
+    txFilter: { q: '', kind: 'all', category: 'all' },
+    lastCategory: {},
+    // What "what you'd have left" counts, chosen on the home page and remembered on this device.
+    left: remembered('budget-left', { planned: true, wishes: false }),
+  },
   currency: () => store.get().settings.currency,
   money: (cents, options) => formatMoney(cents, ctx.currency(), options),
   refresh: () => render(),
@@ -70,20 +81,20 @@ if (demo) {
 
 function start() {
   buildShell();
-  // Any change (a new or edited rule, or data from another device) may make entries due.
-  // applyRecurring only adds entries that are missing, so this settles after one pass.
+  // Any change (a new schedule, or data from another device) may make automatic set-asides due.
+  // applyAuto only adds the ones that are missing, so this settles after one pass.
   store.subscribe(() => {
-    queueMicrotask(applyRecurring);
+    queueMicrotask(applyAuto);
     scheduleRender();
   });
-  applyRecurring();
+  applyAuto();
   addEventListener('hashchange', () => {
     render();
     scrollTo(0, 0);
   });
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'visible') {
-      applyRecurring();
+      applyAuto();
       sync?.syncNow();
     } else if (sync?.dirty) {
       sync.syncNow(); // Leaving the app: push now rather than after the usual short delay.
@@ -94,15 +105,16 @@ function start() {
   render();
 }
 
-// Adds any recurring bills or income that have come due since the app was last open.
-function applyRecurring() {
-  const due = dueOccurrences(store.get(), todayISO());
-  if (due.length) store.saveMany('transactions', due);
+// Moves money into set-asides that are funded automatically, for every scheduled day up to today.
+// Payments themselves are never recorded automatically: they wait on the home page to be confirmed.
+function applyAuto() {
+  const due = autoContributions(store.get(), todayISO());
+  if (due.length) store.addContributions(due);
 }
 
 function buildShell() {
   main = h('main', { id: 'main', class: 'main' });
-  const add = () => transactionDialog(ctx);
+  const add = () => quickAdd(ctx);
   const app = document.getElementById('app');
   app.replaceChildren(
     h('div', { class: 'shell' },
@@ -113,10 +125,12 @@ function buildShell() {
           h('span', { class: 'spacer' }),
           themeToggle(),
           syncPill(ctx),
+          h('a', { class: 'icon-btn menu-btn', href: '#/more', dataset: { route: 'more' }, 'aria-label': 'Menu: Insights, Reports and Settings', title: 'Menu' }, icon('menu')),
           h('button', { type: 'button', class: 'btn btn-primary btn-add', onclick: add }, icon('plus'), 'Add transaction')),
         main)),
-    h('nav', { class: 'tabbar', 'aria-label': 'Main' }, TABS.map((route) => navLink(ROUTES.get(route), 'tab'))),
-    h('button', { type: 'button', class: 'fab', 'aria-label': 'Add transaction', onclick: add }, icon('plus')));
+    h('nav', { class: 'tabbar', 'aria-label': 'Main' }, TABS.map((route) => (route
+      ? navLink(ROUTES.get(route), 'tab')
+      : h('button', { type: 'button', class: 'tab-add', 'aria-label': 'Add transaction', onclick: add }, icon('plus'))))));
   if (demo) {
     app.prepend(h('div', { class: 'demo-banner' }, 'You’re trying the demo with sample data. Nothing you change is saved. ', h('a', { href: './' }, 'Use my own budget')));
   }
@@ -150,7 +164,7 @@ function navLink(item, className) {
   return h('a', { class: className, href: `#/${item.route}`, dataset: { route: item.route } }, icon(item.icon), h('span', {}, item.label));
 }
 
-// Several store changes in a row (e.g. a sync merge, then recurring entries) render once.
+// Several store changes in a row (e.g. a sync merge, then automatic set-asides) render once.
 function scheduleRender() {
   if (renderQueued) return;
   renderQueued = true;
@@ -161,7 +175,14 @@ function scheduleRender() {
 }
 
 function render() {
-  const route = location.hash.replace(/^#\/?/, '');
+  let route = location.hash.replace(/^#\/?/, '');
+  const old = OLD_LINKS[route];
+  if (old) {
+    // Open the merged page at the right section, and show its own address from here on.
+    [route] = old;
+    if (old[1]) ctx.ui.budgetTab = old[1];
+    history.replaceState(null, '', `#/${route}`);
+  }
   const item = ROUTES.get(route) ?? ROUTES.get('dashboard');
   // A sync can re-render the page while someone is typing in a search box: keep their cursor.
   const active = document.activeElement;
@@ -180,6 +201,12 @@ function render() {
   if (focusId) {
     const el = document.getElementById(focusId);
     el?.focus({ preventScroll: true });
-    if (el && selection) el.setSelectionRange(...selection);
+    if (el && selection) {
+      try {
+        el.setSelectionRange(...selection);
+      } catch {
+        // Not every input type has a text selection (dates, for one).
+      }
+    }
   }
 }

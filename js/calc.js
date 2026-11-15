@@ -1,5 +1,6 @@
 import { addMonths, dayOf, dayOfWeek, daysInMonth, monthOf, monthRange, monthsCovered } from './dates.js';
-import { occurrenceId, occurrenceIn } from './recurring.js';
+import { leftThisMonth } from './forecast.js';
+import { occurrences } from './recurring.js';
 
 export const byNewest = (a, b) => String(b.date).localeCompare(String(a.date)) || (b.updatedAt ?? 0) - (a.updatedAt ?? 0);
 
@@ -106,11 +107,12 @@ export function safeToSpend(state, month, today) {
   const fromPot = paidFromPot(state);
   const fromPots = monthTransactions.filter(fromPot).reduce((sum, t) => sum + t.amount, 0);
   const spent = totals(monthTransactions).expense - fromPots;
-  const ids = new Set(monthTransactions.map((t) => t.id));
+  // Payments still to confirm in the month. For this month that includes any left over from earlier.
+  const lastDay = `${month}-${String(daysInMonth(month)).padStart(2, '0')}`;
   const upcoming = month < current ? [] : state.recurring
     .filter((rule) => rule.kind === 'expense')
-    .map((rule) => ({ rule, date: occurrenceIn(rule, month), id: occurrenceId(rule.id, month) }))
-    .filter(({ date, id }) => date && (month > current || date > today) && !ids.has(id) && !(id in state.deleted))
+    .flatMap((rule) => occurrences(state, rule, lastDay))
+    .filter((o) => o.status === 'open' && (monthOf(o.date) === month || (month === current && o.date < lastDay)))
     .sort((a, b) => a.date.localeCompare(b.date));
   const reserved = upcoming.reduce((sum, u) => sum + u.rule.amount, 0);
   const left = limit - spent - reserved;
@@ -164,7 +166,7 @@ export function splitTotal(state, t) {
 // Every movement in or out of one set-aside. kind: 'manual' (added or taken out by hand), 'move' (to or from
 // another set-aside), 'split' (from an income entry) or 'paid' (an expense paid from it).
 export function potEntries(state, goal) {
-  const entries = goal.contributions.map((c) => ({ id: c.id, date: c.date, amount: c.amount, month: monthKey(c), kind: c.move ? 'move' : 'manual', move: c.move ?? null }));
+  const entries = goal.contributions.map((c) => ({ id: c.id, date: c.date, amount: c.amount, month: monthKey(c), kind: c.move ? 'move' : 'manual', move: c.move ?? null, auto: c.auto === true, short: c.short > 0 ? c.short : 0 }));
   for (const t of state.transactions) {
     if (typeof t.date !== 'string') continue;
     const share = splitOf(t)?.[goal.id];
@@ -214,25 +216,20 @@ export function goalProgress(state, goal, today) {
 }
 
 // What can be spent each day for the rest of this month, from the money actually there: spending money
-// (everything in minus everything out, less what's in savings goals) minus bills still to come this month,
-// shared over the days left. Today's spending is added back first, so it only lowers today's share.
-export function spendPerDay(state, today) {
+// (everything in minus everything out, less what's set aside) minus everything still to come out of it this
+// month (payments to confirm, automatic set-asides and, if asked, ticked wishlist items), shared over the days
+// left. Today's spending is added back first, so it only lowers today's share.
+// opts: { planned: count planned payments (default yes), wishes: count ticked wishlist items (default no) }.
+export function spendPerDay(state, today, opts = {}) {
   const month = monthOf(today);
   const daysLeft = daysInMonth(month) - dayOf(today) + 1;
-  const { spending } = balance(state, today);
-  const dated = state.transactions.filter((t) => typeof t.date === 'string' && t.date.startsWith(month));
-  const ids = new Set(dated.map((t) => t.id));
-  const upcoming = state.recurring
-    .filter((rule) => rule.kind === 'expense')
-    .map((rule) => ({ rule, date: occurrenceIn(rule, month), id: occurrenceId(rule.id, month) }))
-    .filter(({ date, id }) => date && date > today && !ids.has(id) && !(id in state.deleted))
-    .sort((a, b) => a.date.localeCompare(b.date));
-  const reserved = upcoming.reduce((sum, u) => sum + u.rule.amount, 0);
+  const sim = leftThisMonth(state, today, opts);
+  const spending = sim.start;
+  const free = sim.end;
   // Spending paid from a set-aside didn't come out of spending money, so it isn't added back.
   const fromPot = paidFromPot(state);
-  const spentToday = totals(dated.filter((t) => t.date === today && !fromPot(t))).expense;
-  const free = spending - reserved;
+  const spentToday = totals(state.transactions.filter((t) => t.date === today && !fromPot(t))).expense;
   const pool = Math.max(0, free + spentToday);
   const perDay = Math.floor(pool / daysLeft);
-  return { spending, reserved, upcoming, free, daysLeft, spentToday, perDay, todayLeft: perDay - spentToday };
+  return { spending, reserved: spending - free, upcoming: sim.events.filter((e) => e.amount < 0), free, daysLeft, spentToday, perDay, todayLeft: perDay - spentToday };
 }
