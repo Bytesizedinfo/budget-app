@@ -4,7 +4,7 @@
 
 import { balance, inMonth, potBalance, potEntries, totals } from './calc.js';
 import { addDays, addMonths, dateInMonth, daysInMonth, isValidDate, monthOf } from './dates.js';
-import { incomeMonths, isAuto, isBillFund, isClosed, isWish, planChecks, plannedFor, scheduleDue, setAsideInMonth, validSchedule } from './pots.js';
+import { incomeMonths, isAuto, isBillFund, isClosed, isSnoozedOn, isWish, planChecks, plannedFor, scheduleDue, setAsideInMonth, validSchedule } from './pots.js';
 import { occurrences, stepDates } from './recurring.js';
 
 // ---------- Money set aside for a payment ----------
@@ -101,7 +101,7 @@ export function simulate(state, today, until, opts = {}) {
     for (const date of stepDates(start, s.type === 'rate' ? s.every : 1, s.type === 'rate' ? s.unit : 'month')) {
       if (date > until || (ticked && date > today)) break;
       const id = `auto_${goal.id}_${date}`;
-      if (!recorded(goal, id)) events.push({ type: 'auto', date, id, goal });
+      if (!recorded(goal, id) && !isSnoozedOn(goal, date)) events.push({ type: 'auto', date, id, goal });
     }
   }
   if (wishes) {
@@ -123,15 +123,15 @@ export function simulate(state, today, until, opts = {}) {
   let lowest = { amount: start, date: today };
 
   for (const e of events) {
-    if (e.type === 'income') e.amount = e.rule.amount;
+    if (e.type === 'income') e.amount = e.occ.amount;
     else if (e.type === 'bill') {
       const fund = funds.get(e.rule.id);
       const held = fund ? Math.max(0, pots.get(fund.id) ?? 0) : 0;
-      e.fromFund = Math.min(held, e.rule.amount);
+      e.fromFund = Math.min(held, e.occ.amount);
       if (e.fromFund) pots.set(fund.id, held - e.fromFund);
-      e.amount = -(e.rule.amount - e.fromFund);
+      e.amount = -(e.occ.amount - e.fromFund);
     } else if (e.type === 'fund') {
-      const missing = Math.max(0, e.rule.amount - Math.max(0, pots.get(e.goal.id) ?? 0));
+      const missing = Math.max(0, e.occ.amount - Math.max(0, pots.get(e.goal.id) ?? 0));
       if (e.fund.type === 'date') e.want = missing;
       else if (e.fund.type === 'rate') e.want = Math.min(e.fund.amount, missing);
       else {
@@ -229,7 +229,7 @@ export function monthPlan(state, month, today) {
     if (rule.kind !== 'expense') continue;
     for (const o of occurrences(state, rule, last)) if (o.status !== 'skipped' && monthOf(o.date) === month) due.push(o);
   }
-  const sum = (list) => list.reduce((total, o) => total + o.rule.amount, 0);
+  const sum = (list) => list.reduce((total, o) => total + o.amount, 0);
   const recurring = due.filter((o) => !o.rule.planned);
   const plannedPay = due.filter((o) => o.rule.planned);
 
@@ -251,7 +251,7 @@ export function monthPlan(state, month, today) {
   const ahead = month > current ? simulate(state, today, dayBefore, { planned: true, income: false }) : null;
   let covered = 0;
   const funded = new Map();
-  for (const o of due) funded.set(o.rule.id, (funded.get(o.rule.id) ?? 0) + o.rule.amount);
+  for (const o of due) funded.set(o.rule.id, (funded.get(o.rule.id) ?? 0) + o.amount);
   for (const [ruleId, amount] of funded) {
     const goal = state.goals.find((g) => g.billId === ruleId);
     if (!goal) continue;
@@ -263,7 +263,7 @@ export function monthPlan(state, month, today) {
   const setAsides = split + auto;
 
   const inCategory = new Map();
-  for (const o of due) inCategory.set(o.rule.categoryId, (inCategory.get(o.rule.categoryId) ?? 0) + o.rule.amount);
+  for (const o of due) inCategory.set(o.rule.categoryId, (inCategory.get(o.rule.categoryId) ?? 0) + o.amount);
   const budgets = state.categories
     .filter((c) => c.kind === 'expense' && !c.archived && Number.isSafeInteger(c.monthlyBudget))
     .map((c) => ({ category: c, budget: c.monthlyBudget, bills: inCategory.get(c.id) ?? 0, extra: Math.max(0, c.monthlyBudget - (inCategory.get(c.id) ?? 0)) }));

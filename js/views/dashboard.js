@@ -9,11 +9,34 @@ import { pace } from '../insights.js';
 import { isWish, sortedGoals } from '../pots.js';
 import { toSplitCard } from '../split.js';
 import { transactionDialog, txRow } from '../tx.js';
-import { budgetRow, card, cardLink, empty, meter, notice, openDialog, remember, segmented, signedAmount, timeframePicker, viewHead } from '../ui.js';
+import { budgetRow, card, cardLink, checkbox, empty, meter, notice, openDialog, remember, segmented, signedAmount, timeframePicker, viewHead } from '../ui.js';
 import { eventRow } from './upcoming.js';
 import { limitDialog } from './budgets.js';
 
 const RANGES = [['today', 'Today'], ['week', 'This week'], ['month', 'This month']];
+
+// The sections of the home page that can be reordered or hidden (To confirm and To split always lead).
+const SECTIONS = [
+  ['left', 'What you’d have left'],
+  ['safe', 'Safe to spend (monthly limit)'],
+  ['balance', 'Total balance'],
+  ['stats', 'Income, spent and net'],
+  ['budgets', 'Budgets'],
+  ['spending', 'Spending by category'],
+  ['recent', 'Recent transactions'],
+  ['coming', 'Coming up this week'],
+  ['setasides', 'Set aside'],
+];
+const WIDE = new Set(['balance', 'stats']); // These span the page; the rest sit two to a row on a wide screen.
+
+// The order and visibility chosen for the home page (settings.home), with any new sections added at the end.
+export function homeLayout(state) {
+  const saved = state.settings.home ?? {};
+  const known = SECTIONS.map(([id]) => id);
+  const order = Array.isArray(saved.order) ? saved.order.filter((id, i, all) => known.includes(id) && all.indexOf(id) === i) : [];
+  for (const id of known) if (!order.includes(id)) order.push(id);
+  return { order, hidden: new Set(Array.isArray(saved.hidden) ? saved.hidden : []) };
+}
 
 export function renderDashboard(ctx) {
   const state = ctx.store.get();
@@ -30,28 +53,85 @@ export function renderDashboard(ctx) {
   const safe = safeToSpend(state, month, today);
   const daily = spendPerDay(state, today, ctx.ui.left);
 
+  const build = {
+    left: () => leftCard(ctx, state, daily, safe, month, pace(state, today)),
+    safe: () => (safe ? safeHero(ctx, safe, month) : hero(ctx, budgets, month, today)),
+    balance: () => balanceCard(ctx, state, today),
+    stats: () => h('div', { class: 'stack home-stats' },
+      h('p', { class: 'range-note' }, icon('info', 'icon-sm'), `Income, spending, categories and recent transactions: ${timeframeText(range)}. Tap any number to see how it’s worked out.`),
+      h('div', { class: 'kpis' },
+        stat(ctx, 'Income', now.income, before?.income, previous, true, () => flowSheet(ctx, 'income', transactions, range)),
+        stat(ctx, 'Spent', now.expense, before?.expense, previous, false, () => flowSheet(ctx, 'expense', transactions, range)),
+        stat(ctx, 'Net', now.net, before?.net, previous, true, () => netSheet(ctx, transactions, range, now)))),
+    budgets: () => budgetsCard(ctx, budgets),
+    spending: () => spendingCard(ctx, transactions, range),
+    recent: () => recentCard(ctx, transactions, range),
+    coming: () => comingUpCard(ctx, state, today),
+    setasides: () => goalsCard(ctx, state, today),
+  };
+  const layout = homeLayout(state);
+  const cells = layout.order.filter((id) => !layout.hidden.has(id)).map((id) => {
+    const el = build[id]();
+    if (!el) return null;
+    el.dataset.home = id;
+    if (WIDE.has(id)) el.classList.add('home-wide');
+    return el;
+  });
+
   return h('div', { class: 'view' },
     viewHead(ctx, 'Home', { actions: [timeframePicker(ctx)] }),
     h('div', { class: 'stack' },
       dueCard(ctx),
       toSplitCard(ctx),
-      h('div', { class: 'hero-row' },
-        leftCard(ctx, state, daily, safe, month, pace(state, today)),
-        safe ? safeHero(ctx, safe, month) : hero(ctx, budgets, month, today)),
-      balanceCard(ctx, state, today),
-      h('p', { class: 'range-note' }, icon('info', 'icon-sm'), `Income, spending and the lists below: ${timeframeText(range)}. Tap any number to see how it’s worked out.`),
-      h('div', { class: 'kpis' },
-        stat(ctx, 'Income', now.income, before?.income, previous, true, () => flowSheet(ctx, 'income', transactions, range)),
-        stat(ctx, 'Spent', now.expense, before?.expense, previous, false, () => flowSheet(ctx, 'expense', transactions, range)),
-        stat(ctx, 'Net', now.net, before?.net, previous, true, () => netSheet(ctx, transactions, range, now))),
-      h('div', { class: 'grid-2' },
-        budgetsCard(ctx, budgets),
-        spendingCard(ctx, transactions, range)),
-      h('div', { class: 'grid-2' },
-        recentCard(ctx, transactions, range),
-        h('div', { class: 'stack' },
-          comingUpCard(ctx, state, today),
-          goalsCard(ctx, state, today)))));
+      h('div', { class: 'home-grid' }, cells),
+      h('button', { type: 'button', class: 'btn btn-ghost btn-sm home-customise', onclick: () => homeDialog(ctx) }, icon('settings', 'icon-sm'), 'Customise this page')));
+}
+
+// Choose which sections the home page shows, and in what order. Saved with the budget, so every device matches.
+function homeDialog(ctx) {
+  const layout = homeLayout(ctx.store.get());
+  let order = [...layout.order];
+  const shown = new Map(order.map((id) => [id, !layout.hidden.has(id)]));
+  const names = new Map(SECTIONS);
+  const list = h('ul', { class: 'home-order' });
+  const draw = () => {
+    list.replaceChildren(...order.map((id, i) => {
+      const box = checkbox(`show-${id}`, names.get(id), shown.get(id));
+      box.querySelector('input').addEventListener('change', (event) => shown.set(id, event.target.checked));
+      const move = (dir) => () => {
+        const next = [...order];
+        next.splice(i, 1);
+        next.splice(i + dir, 0, id);
+        order = next;
+        draw();
+        list.querySelector(`[data-move="${id}${dir}"]`)?.focus();
+      };
+      return h('li', { dataset: { section: id } },
+        box,
+        h('button', { type: 'button', class: 'icon-btn icon-btn-sm', 'aria-label': `Move ${names.get(id)} up`, dataset: { move: `${id}-1` }, disabled: i === 0, onclick: move(-1) }, icon('chevronUp')),
+        h('button', { type: 'button', class: 'icon-btn icon-btn-sm', 'aria-label': `Move ${names.get(id)} down`, dataset: { move: `${id}1` }, disabled: i === order.length - 1, onclick: move(1) }, icon('chevronDown')));
+    }));
+  };
+  draw();
+  const dialog = openDialog({
+    title: 'Customise the home page',
+    content: h('div', { class: 'form-grid' },
+      h('p', { class: 'field-hint' }, 'Untick a section to hide it, and use the arrows to change the order. “To confirm” and “To split” always stay at the top when there’s something in them.'),
+      list),
+    extraActions: [h('button', {
+      type: 'button',
+      class: 'btn btn-ghost',
+      onclick: () => {
+        ctx.store.setSettings({ home: null });
+        dialog.close();
+        ctx.toast('Home page reset');
+      },
+    }, 'Reset')],
+    onSubmit() {
+      ctx.store.setSettings({ home: { order, hidden: order.filter((id) => !shown.get(id)) } });
+      ctx.toast('Home page saved');
+    },
+  });
 }
 
 // The one number this page leads with when there's an overall monthly limit: what's safe to spend.
@@ -245,7 +325,7 @@ function comingUpCard(ctx, state, today) {
   const events = timeline(state, today, 7).events.filter((e) => e.amount !== 0 && e.date > today);
   if (!events.length) return null;
   return card({ title: 'Coming up this week', sub: 'And the spending money left after each', action: cardLink('Upcoming', '#/upcoming') },
-    h('ul', { class: 'tl tl-compact' }, events.slice(0, 6).map((e) => eventRow(ctx, e, today))));
+    h('ul', { class: 'tl tl-compact' }, events.slice(0, 6).map((e) => eventRow(ctx, e, today, { edit: true }))));
 }
 
 function goalsCard(ctx, state, today) {

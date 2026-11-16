@@ -4,11 +4,11 @@
 
 import { balance, categoriesFor, categoryName, goalProgress, inRange, potBalance, potEntries, sortCategories } from '../calc.js';
 import { barList } from '../charts.js';
-import { formatDate, formatMonth, formatShortDate, isValidDate, timeframe, timeframeText, todayISO } from '../dates.js';
+import { formatDate, formatMonth, formatMonthName, formatShortDate, isValidDate, monthOf, timeframe, timeframeText, todayISO } from '../dates.js';
 import { h, icon } from '../dom.js';
 import { centsToInput, parseAmount } from '../money.js';
 import { needsWants } from '../insights.js';
-import { defaultSplit, incomeMonths, isWish, planChecks, plannedFor, ratioOf, setAsideIn, sortedGoals, sourcesOf, tryPay, validSchedule } from '../pots.js';
+import { defaultSplit, incomeMonths, isSnoozed, isWish, planChecks, plannedFor, ratioOf, setAsideIn, sortedGoals, sourcesOf, tryPay, validSchedule } from '../pots.js';
 import { defaultSplitDialog, markSplitUsed, ratioDialog, ratioText, ruleText, scheduleFields, scheduleText, splitWords, toSplitCard } from '../split.js';
 import { newId } from '../store.js';
 import { card, checkbox, confirmDialog, empty, field, meter, notice, openDialog, pointList } from '../ui.js';
@@ -123,6 +123,7 @@ function goalCard(ctx, state, goal, index, goals, today, range, actual) {
       : null,
     h('p', { class: 'goal-amount' }, h('span', { class: `goal-saved${p.saved < 0 ? ' bad' : ''}` }, ctx.money(p.saved)), p.open ? ' set aside' : ` of ${ctx.money(goal.target)}`),
     p.open ? null : meter(p.ratio),
+    isSnoozed(goal, monthOf(today)) ? h('p', { class: 'goal-note snoozed-note' }, icon('clock', 'icon-sm'), `Snoozed for ${formatMonthName(monthOf(today))}: nothing goes into it this month.`) : null,
     note,
     p.saved < 0 ? notice('warn', `More has been paid from ${goal.name} than was in it. The ${ctx.money(-p.saved)} came out of your spending money.`) : null,
     h('p', { class: 'goal-source' }, h('span', { class: 'goal-source-label' }, 'Schedule: '), schedule ?? 'None'),
@@ -132,7 +133,34 @@ function goalCard(ctx, state, goal, index, goals, today, range, actual) {
     h('div', { class: 'btn-row' },
       h('button', { type: 'button', class: 'btn btn-primary btn-sm', onclick: () => contributionDialog(ctx, goal, 1) }, icon('plus'), 'Add money'),
       p.saved > 0 ? h('button', { type: 'button', class: 'btn btn-sm', onclick: () => contributionDialog(ctx, goal, -1) }, 'Withdraw') : null,
-      p.saved > 0 ? h('button', { type: 'button', class: 'btn btn-sm', onclick: () => moveDialog(ctx, goal) }, icon('swap', 'icon-sm'), 'Move') : null));
+      p.saved > 0 ? h('button', { type: 'button', class: 'btn btn-sm', onclick: () => moveDialog(ctx, goal) }, icon('swap', 'icon-sm'), 'Move') : null,
+      snoozeControl(ctx, state, goal, today)));
+}
+
+// Snooze: nothing is asked of income for this set-aside, and nothing moves into it automatically, for the rest
+// of this month. Offered only when something would otherwise go into it. Resume turns it back on from today.
+export function snoozeControl(ctx, state, goal, today) {
+  const month = monthOf(today);
+  const latest = () => ctx.store.get().goals.find((g) => g.id === goal.id) ?? goal;
+  if (isSnoozed(goal, month)) {
+    return h('button', {
+      type: 'button',
+      class: 'btn btn-sm',
+      onclick: () => {
+        ctx.store.save('goals', { ...latest(), snoozed: { month, until: today } });
+        ctx.toast(`${goal.name} resumed`);
+      },
+    }, 'Resume');
+  }
+  if (!goal.auto && !sourcesOf(state, goal).length) return null;
+  return h('button', {
+    type: 'button',
+    class: 'btn btn-sm',
+    onclick: () => {
+      ctx.store.save('goals', { ...latest(), snoozed: { month } });
+      ctx.toast(`${goal.name} snoozed for ${formatMonthName(month)}`);
+    },
+  }, icon('clock', 'icon-sm'), `Snooze ${formatMonthName(month)}`);
 }
 
 // The order decides which set-asides are filled first when an income is too small for the whole split.

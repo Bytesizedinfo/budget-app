@@ -8,6 +8,7 @@ Five places on a phone: **Home**, **Activity**, a **+** to add, **Budget** and *
 - **To confirm**: payments and income whose day has come. Nothing is recorded by itself: mark each one **Paid** (with the real amount), **Skip** it, or **Postpone** it.
 - **What you'd have left this month**: your spending money minus everything still to come out of it this month (payments to confirm, money moving into set-asides), and what that means per day. Switches add **planned payments** and the **wishlist items you tick**. "How is this worked out?" lists every item.
 - Safe to spend against an optional monthly limit, your total balance (set aside and spending money), income, spending and net for the time frame, and what's coming up this week. Tap any number to see how it's worked out.
+- **Customise this page**: hide sections or change their order. The layout is saved with your budget, so every device matches.
 
 **Activity**
 - Every transaction as a **list** (search, filters, CSV export) or a **calendar**: what came in and went out each day, dots on days with payments to come, and each day's details with an Add button.
@@ -16,12 +17,12 @@ Five places on a phone: **Home**, **Activity**, a **+** to add, **Budget** and *
 **Budget**
 - **Month plan** for this month or next: expected income (what came in last month, or your own figure) minus recurring payments, planned payments, set-asides and category budgets = what's left unbudgeted, and per day. Over-planning is flagged. Every line opens its breakdown.
 - **Categories**: a monthly amount for each kind of spending, set together with what's left updating as you type, or **suggested from your average spending**. Mark each as a need or a want. Unspent money goes back to your spending money.
-- **Set-asides**: savings goals and pots, the default split for each kind of income (with the **Save for my goals** and **50/30/20** presets), saving schedules (an amount every N days, weeks or months; reach a target by a date or within a length of time), money set aside automatically or from income, moving money between set-asides, a safety buffer, and checks on whether each goal is on track.
+- **Set-asides**: savings goals and pots, the default split for each kind of income (with the **Save for my goals** and **50/30/20** presets), saving schedules (an amount every N days, weeks or months; reach a target by a date or within a length of time), money set aside automatically or from income, moving money between set-asides, **snoozing** a set-aside for the month (nothing goes into it until next month, or until you resume it), a safety buffer, and checks on whether each goal is on track.
 
 **Upcoming**
 - **Recurring payments** and **planned payments** (expense or income) that repeat once, daily, weekly, every 2 or 4 weeks, twice a month, monthly, every 3 or 6 months, yearly, or every N days/weeks/months/years; end never, on a date, or after N times ("3 of 12 paid").
 - **Set money aside for any payment**: all of it a number of days before, an amount every N days/weeks/months, or spread monthly until it's due. The payment is paid from that money.
-- The **next 60 days** with the spending money left after each item and the lowest point.
+- The **next 60 days** with the spending money left after each item and the lowest point. Tap a payment there to **change just that one** (its amount this time, or its date) without touching the rest.
 - A **wishlist**: price, priority, link and note; saved up from income or automatically on a schedule; "ready around…", "buying it now would leave you…", a tick to count it on Home, Bought (paid from what was set aside), and a "saved by not buying" total.
 
 **Also**

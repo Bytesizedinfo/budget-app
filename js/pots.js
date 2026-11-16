@@ -23,6 +23,12 @@ export function sortedGoals(state) {
     .map((x) => x.goal);
 }
 
+// A set-aside can be snoozed for one month (`snoozed: { month, until? }` on the goal): nothing is asked of
+// income for it and nothing moves into it automatically that month. Resuming part-way through the month sets
+// `until` to that day, so the automatic moves that were skipped aren't made up afterwards.
+export const isSnoozed = (goal, month) => goal.snoozed?.month === month && !goal.snoozed.until;
+export const isSnoozedOn = (goal, date) => goal.snoozed?.month === monthOf(date) && (!goal.snoozed.until || date <= goal.snoozed.until);
+
 // A set-aside funded automatically: its schedule's amount moves out of spending money by itself.
 export const isAuto = (goal) => goal.auto === true && !isBillFund(goal) && !isClosed(goal) && validSchedule(goal) !== null;
 
@@ -73,7 +79,7 @@ export function rateInMonth(schedule, month) {
 // extraBefore: money a forecast expects to have gone in before the month, on top of what's recorded.
 export function scheduleDue(state, goal, month, extraBefore = 0) {
   const s = validSchedule(goal);
-  if (!s) return 0;
+  if (!s || isSnoozed(goal, month)) return 0;
   if (s.type === 'rate') return rateInMonth(s, month);
   const before = extraBefore + potEntries(state, goal).filter((e) => e.month < month).reduce((sum, e) => sum + e.amount, 0);
   const remaining = Math.max(0, goal.target - before);
@@ -178,9 +184,11 @@ function allocate(state, income, split, alreadyIn, own = {}) {
   const rows = [];
   for (const goal of sortedGoals(state)) {
     const rule = split.rules.get(goal.id) ?? null;
+    const snoozed = isSnoozed(goal, month);
     let want = 0;
     let already = 0;
-    if (rule?.type === 'percent') want = Math.round((income.amount * rule.value) / 100);
+    if (snoozed) want = 0;
+    else if (rule?.type === 'percent') want = Math.round((income.amount * rule.value) / 100);
     else if (rule) {
       already = alreadyIn(goal, month);
       want = Math.max(0, (rule.type === 'schedule' ? scheduleDue(state, goal, month) : rule.value) - already);
@@ -193,11 +201,11 @@ function allocate(state, income, split, alreadyIn, own = {}) {
     const give = Math.min(want, left, pool);
     left -= give;
     pool -= give;
-    rows.push({ goal, rule, want, give, already, toTarget, rest: 0 });
+    rows.push({ goal, rule, want, give, already, toTarget, rest: 0, snoozed });
   }
   if (split.source === 'ratio' && pool > 0 && left > 0) {
     const row = rows.find((r) => r.goal.id === split.ratio.restId);
-    if (row) {
+    if (row && !row.snoozed) {
       let extra = Math.min(pool, left);
       if (row.toTarget !== null) extra = Math.min(extra, Math.max(0, row.toTarget - row.give));
       row.give += extra;

@@ -26,7 +26,7 @@ export function paidDialog(ctx, occ) {
     title: income ? `${rule.name} received` : `${rule.name} paid`,
     submitLabel: income ? 'Received' : 'Paid',
     content: h('div', { class: 'form-grid' },
-      field('Amount', h('input', { name: 'amount', class: 'input input-amount', inputmode: 'decimal', autocomplete: 'off', autofocus: true, value: centsToInput(rule.amount, ctx.currency()) }),
+      field('Amount', h('input', { name: 'amount', class: 'input input-amount', inputmode: 'decimal', autocomplete: 'off', autofocus: true, value: centsToInput(occ.amount ?? rule.amount, ctx.currency()) }),
         'Change it if it was different this time.'),
       field('Date', h('input', { name: 'date', type: 'date', class: 'input', value: occ.date <= today ? occ.date : today })),
       held > 0 ? h('p', { class: 'field-hint' }, `${ctx.money(held)} is set aside for this, and is used first.`) : null),
@@ -86,6 +86,39 @@ export function postponeDialog(ctx, occ) {
   });
 }
 
+// Changes one occurrence that's still to come: its amount this time, or its date. Later ones aren't affected.
+export function occurrenceDialog(ctx, occ) {
+  const rule = latestRule(ctx, occ);
+  const income = rule.kind === 'income';
+  const dialog = openDialog({
+    title: `${rule.name} on ${formatShortDate(occ.date)}`,
+    content: h('div', { class: 'form-grid' },
+      h('p', { class: 'field-hint' }, `Just this one. To change every ${income ? 'time' : 'payment'} from now on, edit ${rule.name} in the list on the Upcoming page.`),
+      field('Amount this time', h('input', { name: 'amount', class: 'input input-amount', inputmode: 'decimal', autocomplete: 'off', autofocus: true, value: centsToInput(occ.amount, ctx.currency()) }),
+        `Usually ${ctx.money(rule.amount)}.`),
+      field('Date', h('input', { name: 'date', type: 'date', class: 'input', value: occ.date }), `Scheduled for ${formatDate(occ.due)}.`)),
+    extraActions: [
+      h('button', { type: 'button', class: 'btn btn-ghost', onclick: () => { dialog.close(); skipOccurrence(ctx, occ); } }, 'Skip this one'),
+      h('button', { type: 'button', class: 'btn btn-ghost', onclick: () => { dialog.close(); paidDialog(ctx, occ); } }, income ? 'Received now' : 'Pay now'),
+    ],
+    onSubmit(data) {
+      const amount = parseAmount(data.get('amount'));
+      if (!amount) throw new Error('Enter an amount greater than zero.');
+      const date = data.get('date');
+      if (!isValidDate(date)) throw new Error('Choose a valid date.');
+      const current = latestRule(ctx, occ);
+      const amounts = { ...(current.amounts ?? {}) };
+      if (amount === current.amount) delete amounts[occ.key];
+      else amounts[occ.key] = amount;
+      const moved = { ...(current.moved ?? {}) };
+      if (date === occ.due) delete moved[occ.key];
+      else moved[occ.key] = date;
+      ctx.store.save('recurring', { ...current, amounts, moved });
+      ctx.toast(`${rule.name} changed for this one`);
+    },
+  });
+}
+
 // The three actions for one occurrence.
 export function occurrenceActions(ctx, occ) {
   const income = occ.rule.kind === 'income';
@@ -119,7 +152,7 @@ export function dueCard(ctx) {
       h('span', { class: 'due-main' },
         h('span', { class: 'due-name' }, o.rule.name),
         h('span', { class: 'due-meta' }, o.date === today ? 'Due today' : `Due ${formatShortDate(o.date)}`, o.rule.planned ? ' · planned' : '')),
-      signedAmount(ctx, o.rule.kind, o.rule.amount),
+      signedAmount(ctx, o.rule.kind, o.amount),
       occurrenceActions(ctx, o)))),
     older.length
       ? h('p', { class: 'card-foot due-older' }, `And ${older.length} earlier ${older.length === 1 ? 'one' : 'ones'}. `, h('button', { type: 'button', class: 'link-btn', onclick: skipOlder }, 'Skip them all'))

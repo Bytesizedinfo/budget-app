@@ -104,6 +104,7 @@ export function settledCount(state, rule) {
 // Every occurrence of a payment in schedule order, with what has happened to it:
 //   status: 'paid' (its transaction exists), 'skipped' (it was skipped or deleted) or 'open' (waiting, or to come).
 //   due: where the schedule put it.   date: where it is now, after any postponing.
+//   amount: the payment's amount, or this occurrence's own (`amounts` on the rule), while it's open.
 // Open occurrences stop at the rule's last date, after "ends after N times" is used up, and while it's paused.
 // Stops at the first one the schedule puts after `to`.
 function* walk(state, rule, to) {
@@ -125,7 +126,12 @@ function* walk(state, rule, to) {
       allowed -= 1;
     }
     const moved = rule.moved?.[o.key];
-    yield { rule, key: o.key, id, due: o.due, date: status === 'open' && typeof moved === 'string' ? moved : o.due, status };
+    const own = rule.amounts?.[o.key];
+    yield {
+      rule, key: o.key, id, due: o.due, status,
+      date: status === 'open' && typeof moved === 'string' ? moved : o.due,
+      amount: status === 'open' && Number.isSafeInteger(own) && own > 0 ? own : rule.amount,
+    };
   }
 }
 
@@ -161,7 +167,7 @@ export function dueList(state, today) {
 // The transaction that marking an occurrence paid records.
 export function occurrenceTransaction(o, extra = {}) {
   const { rule } = o;
-  return { id: o.id, date: o.date, kind: rule.kind, amount: rule.amount, categoryId: rule.categoryId, note: rule.name, recurringId: rule.id, ...extra };
+  return { id: o.id, date: o.date, kind: rule.kind, amount: o.amount ?? rule.amount, categoryId: rule.categoryId, note: rule.name, recurringId: rule.id, ...extra };
 }
 
 // Everything waiting to be confirmed, as the transactions that confirming each one would record.

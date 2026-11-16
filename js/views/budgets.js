@@ -75,7 +75,7 @@ export function amountsDialog(ctx, month = monthOf(todayISO())) {
   const categories = sortCategories(state.categories.filter((c) => c.kind === 'expense' && !c.archived));
   // Payments already planned in each category count inside its amount.
   const bills = new Map();
-  for (const o of [...plan.recurring.items, ...plan.planned.items]) bills.set(o.rule.categoryId, (bills.get(o.rule.categoryId) ?? 0) + o.rule.amount);
+  for (const o of [...plan.recurring.items, ...plan.planned.items]) bills.set(o.rule.categoryId, (bills.get(o.rule.categoryId) ?? 0) + o.amount);
   const total = h('b', {});
   const left = h('b', {});
   const leftRow = h('p', { class: 'split-keep amounts-left' }, h('span', {}, 'Left unbudgeted'), left);
@@ -169,7 +169,7 @@ function limitCard(ctx, month) {
       h('div', {}, h('dt', {}, over ? 'Over by' : 'Left'), h('dd', { class: over ? 'over' : '' }, ctx.money(Math.abs(safe.left))))),
     meter((safe.spent + safe.reserved) / safe.limit, safe.level, 'meter-lg'),
     safe.upcoming.length
-      ? h('p', { class: 'card-foot' }, `Set aside for bills: ${safe.upcoming.map((u) => `${u.rule.name} ${ctx.money(u.rule.amount)} on ${formatShortDate(u.date)}`).join(', ')}.`)
+      ? h('p', { class: 'card-foot' }, `Set aside for bills: ${safe.upcoming.map((u) => `${u.rule.name} ${ctx.money(u.amount)} on ${formatShortDate(u.date)}`).join(', ')}.`)
       : null);
 }
 

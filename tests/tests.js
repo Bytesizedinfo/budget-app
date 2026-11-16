@@ -1225,6 +1225,57 @@ test('calendar days, budget suggestions, and files from the earlier version', ()
   assert.ok(refused);
 });
 
+
+// ---------- one occurrence with its own amount, and snoozing a set-aside ----------
+
+test('one occurrence of a payment can have its own amount, without changing the others', () => {
+  const state = leftState();
+  const phone = state.recurring.find((r) => r.id === 'phone');
+  const base = leftThisMonth(state, '2026-11-12').end;
+  state.recurring = state.recurring.map((r) => (r.id === 'phone' ? { ...r, amounts: { '2026-11': 4500 } } : r));
+  const occ = occurrences(state, state.recurring.find((r) => r.id === 'phone'), '2026-12-31');
+  assert.deepEqual(occ.map((o) => [o.key, o.amount]), [['2026-11', 4500], ['2026-12', 3000]]);
+  assert.equal(leftThisMonth(state, '2026-11-12').end, base - 1500, 'the forecast uses this month’s amount');
+  assert.equal(occurrenceTransaction(occ[0]).amount, 4500, 'and so does marking it paid');
+  assert.equal(monthPlan(state, '2026-11', '2026-11-12').recurring.total, 4500);
+  assert.equal(monthPlan(state, '2026-12', '2026-11-12').recurring.total, 3000);
+  assert.equal(phone.amount, 3000);
+  // Once it's paid, the record keeps what was actually paid, not the override.
+  state.transactions = [...state.transactions, occurrenceTransaction(occ[0], { amount: 4000 })];
+  assert.equal(occurrences(state, state.recurring.find((r) => r.id === 'phone'), '2026-11-30')[0].status, 'paid');
+});
+
+test('a snoozed set-aside gets nothing from income or automatically that month, and resumes without catching up', () => {
+  const state = potState();
+  state.transactions = [tx('i', '2026-11-01', 100000, { kind: 'income' })];
+  const [save, trip, pods] = state.goals;
+  save.plan = { type: 'percent', value: 20 };
+  trip.auto = true;
+  trip.autoSince = '2026-11-03';
+  trip.schedule = { type: 'rate', amount: 1000, every: 1, unit: 'week' };
+  pods.schedule = { type: 'target', within: null };
+  pods.plan = { type: 'schedule' };
+  const pay = tx('p', '2026-11-13', 50000, { kind: 'income', categoryId: 'c_salary' });
+  assert.deepEqual(suggestSplit(state, pay), { save: 10000, pods: 8725 });
+  save.snoozed = { month: '2026-11' };
+  pods.snoozed = { month: '2026-11' };
+  assert.deepEqual(suggestSplit(state, pay), {}, 'nothing is asked for them in November');
+  assert.ok(planSplit(state, pay).rows.every((r) => r.goal.id === 'trip' || r.snoozed));
+  assert.equal(suggestSplit(state, tx('d', '2026-12-01', 50000, { kind: 'income', categoryId: 'c_salary' })).save, 10000, 'December is unaffected');
+  assert.equal(scheduleDue(state, pods, '2026-11'), 0);
+  assert.equal(scheduleDue(state, pods, '2026-12'), Math.ceil(34900 / 3), 'the missed month is spread over the rest');
+  // Automatic moves stop for the month...
+  assert.deepEqual(moves(state, '2026-11-20'), [['2026-11-03', 1000], ['2026-11-10', 1000], ['2026-11-17', 1000]]);
+  trip.snoozed = { month: '2026-11' };
+  assert.deepEqual(moves(state, '2026-11-30'), []);
+  assert.deepEqual(moves(state, '2026-12-02'), [['2026-12-01', 1000]], 'and start again next month');
+  // ...and resuming on the 18th doesn't make up the ones that were skipped.
+  trip.snoozed = { month: '2026-11', until: '2026-11-18' };
+  assert.deepEqual(moves(state, '2026-11-30'), [['2026-11-24', 1000]]);
+  save.snoozed = { month: '2026-11', until: '2026-11-18' };
+  assert.equal(suggestSplit(state, pay).save, 10000, 'income is split into it again once resumed');
+});
+
 // ---------- runner ----------
 
 const list = document.getElementById('results');

@@ -118,6 +118,7 @@ export function splitDialog(ctx, income) {
       const value = preset === 'saved' ? current[row.goal.id] ?? 0 : row.give;
       inputs.get(row.goal.id).value = value > 0 ? centsToInput(value, currency) : '';
       const notes = [
+        row.snoozed ? 'Snoozed this month' : null,
         row.rule ? `${preset === 'default' ? 'Default' : 'Preset'}: ${row.rule.type === 'schedule' ? scheduleText(ctx, state, row.goal, monthOf(tx.date)) ?? 'on its schedule' : ruleText(ctx, row.rule)}` : null,
         row.rest ? `plus ${ctx.money(row.rest)} of the savings part left over` : null,
         row.rule && row.rule.type !== 'percent' && row.already > 0 ? `${ctx.money(row.already)} already this month` : null,

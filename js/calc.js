@@ -114,7 +114,7 @@ export function safeToSpend(state, month, today) {
     .flatMap((rule) => occurrences(state, rule, lastDay))
     .filter((o) => o.status === 'open' && (monthOf(o.date) === month || (month === current && o.date < lastDay)))
     .sort((a, b) => a.date.localeCompare(b.date));
-  const reserved = upcoming.reduce((sum, u) => sum + u.rule.amount, 0);
+  const reserved = upcoming.reduce((sum, u) => sum + u.amount, 0);
   const left = limit - spent - reserved;
   const result = {
     limit, spent, fromPots, reserved, upcoming, left, level: left < 0 ? 'over' : 'ok', past: month < current, future: month > current,

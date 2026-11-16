@@ -157,7 +157,7 @@ function paymentsSheet(ctx, plan, planned) {
       ? h('ul', { class: 'bd-list' }, items.sort((a, b) => a.date.localeCompare(b.date)).map((o) => h('li', {},
         h('span', { class: 'bd-date' }, formatShortDate(o.date)),
         h('span', { class: 'bd-name' }, o.rule.name, h('span', { class: 'bd-cat' }, `${categoryName(state, o.rule.categoryId)} · ${status[o.status] ?? o.status}`)),
-        h('span', { class: 'amount' }, ctx.money(o.rule.amount)))))
+        h('span', { class: 'amount' }, ctx.money(o.amount)))))
       : h('p', { class: 'bd-note' }, 'None.'),
     h('p', { class: 'bd-note' }, 'Add or change them on the Upcoming page.'));
 }

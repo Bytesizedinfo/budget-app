@@ -4,7 +4,7 @@
 import { categoryName } from '../calc.js';
 import { addMonths, dayOfWeek, formatDay, formatMonth, monthOf, todayISO } from '../dates.js';
 import { h, icon } from '../dom.js';
-import { occurrenceActions } from '../due.js';
+import { occurrenceActions, occurrenceDialog } from '../due.js';
 import { calendarDays, projectedOn } from '../forecast.js';
 import { quickAdd } from '../keypad.js';
 import { txRow } from '../tx.js';
@@ -99,7 +99,9 @@ function dayCard(ctx, state, day, today) {
         day.scheduled.map((o) => h('div', { class: 'due-row' },
           initialBadge(o.rule.name),
           h('span', { class: 'due-main' }, h('span', { class: 'due-name' }, o.rule.name), h('span', { class: 'due-meta' }, categoryName(state, o.rule.categoryId))),
-          signedAmount(ctx, o.rule.kind, o.rule.amount),
-          o.date <= today ? occurrenceActions(ctx, o) : null)))
+          signedAmount(ctx, o.rule.kind, o.amount),
+          o.date <= today
+            ? occurrenceActions(ctx, o)
+            : h('button', { type: 'button', class: 'btn btn-sm', onclick: () => occurrenceDialog(ctx, o) }, 'Change this one'))))
       : null);
 }

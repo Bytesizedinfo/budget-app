@@ -2,17 +2,17 @@
 // the wishlist.
 
 import { byNewest, categoriesFor, categoryName, inRange, potBalance, rangeSpan, totals } from '../calc.js';
-import { addDays, daysBetween, formatDate, formatMonth, formatShortDate, isValidDate, timeframe, timeframeText, todayISO } from '../dates.js';
+import { addDays, daysBetween, formatDate, formatMonth, formatMonthName, formatShortDate, isValidDate, monthOf, timeframe, timeframeText, todayISO } from '../dates.js';
 import { h, icon } from '../dom.js';
-import { dueCard, paidDialog } from '../due.js';
+import { dueCard, occurrenceDialog, paidDialog } from '../due.js';
 import { fundGoal, fundOf, savedByNotBuying, timeline, wishInfo } from '../forecast.js';
 import { centsToInput, parseAmount } from '../money.js';
-import { isClosed, isWish, sortedGoals } from '../pots.js';
+import { isClosed, isSnoozed, isWish, sortedGoals } from '../pots.js';
 import { nextOpen, occurrences, occurrencesBetween, repeatOf, repeatWords, settledCount } from '../recurring.js';
 import { markSplitUsed, scheduleFields, scheduleText } from '../split.js';
 import { txRow } from '../tx.js';
 import { card, checkbox, confirmDialog, empty, field, initialBadge, meter, notice, openDialog, segmented, signedAmount, timeframePicker, viewHead } from '../ui.js';
-import { contributionDialog } from './plan.js';
+import { contributionDialog, snoozeControl } from './plan.js';
 
 const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
 
@@ -42,11 +42,20 @@ function eventLabel(e) {
   return e.rule.name;
 }
 
-export function eventRow(ctx, e, today) {
-  const note = e.type === 'bill' && e.fromFund ? `${ctx.money(e.fromFund)} from its set-aside` : e.type === 'income' ? 'expected' : e.at && e.at < today ? 'waiting to be confirmed' : '';
+// edit: a payment or income can be tapped to change just that one (its amount this time, or its date).
+export function eventRow(ctx, e, today, { edit = false } = {}) {
+  const dated = e.type === 'bill' || e.type === 'income';
+  const note = [
+    e.type === 'bill' && e.fromFund ? `${ctx.money(e.fromFund)} from its set-aside` : e.type === 'income' ? 'expected' : null,
+    e.at && e.at < today ? 'waiting to be confirmed' : null,
+    dated && e.occ.amount !== e.rule.amount ? `usually ${ctx.money(e.rule.amount)}` : null,
+  ].filter(Boolean).join(' · ');
+  const name = edit && dated
+    ? h('button', { type: 'button', class: 'link-btn tl-edit', 'aria-label': `Change ${e.rule.name} on ${formatShortDate(e.date)}`, onclick: () => occurrenceDialog(ctx, e.occ) }, eventLabel(e))
+    : eventLabel(e);
   return h('li', { class: 'tl-row' },
     h('span', { class: 'tl-date' }, e.date === today ? 'Today' : formatShortDate(e.date)),
-    h('span', { class: 'tl-name' }, eventLabel(e), note ? h('span', { class: 'tl-note' }, note) : null),
+    h('span', { class: 'tl-name' }, name, note ? h('span', { class: 'tl-note' }, note) : null),
     h('span', { class: `amount${e.amount > 0 ? ' income' : ''}` }, ctx.money(e.amount, { sign: true })),
     h('span', { class: `tl-after${e.after < 0 ? ' bad' : ''}` }, ctx.money(e.after)));
 }
@@ -57,7 +66,7 @@ function timelineCard(ctx, state, today) {
   if (!rows.length) {
     return card({ title: 'The next 60 days' }, empty('Nothing is scheduled. Add a recurring or planned payment below and it will show here, with what it leaves you.'));
   }
-  const list = (items) => h('ul', { class: 'tl' }, items.map((e) => eventRow(ctx, e, today)));
+  const list = (items) => h('ul', { class: 'tl' }, items.map((e) => eventRow(ctx, e, today, { edit: true })));
   return card({ title: 'The next 60 days', sub: `Starting from the ${ctx.money(line.start)} spending money you have now` },
     line.lowest.amount < 0
       ? notice('over', `Your spending money would run out on ${formatDate(line.lowest.date)}: ${ctx.money(-line.lowest.amount)} short at its lowest.`)
@@ -65,7 +74,7 @@ function timelineCard(ctx, state, today) {
     h('div', { class: 'tl-head', 'aria-hidden': 'true' }, h('span', {}, 'Date'), h('span', {}, ''), h('span', {}, 'Amount'), h('span', {}, 'Left after')),
     list(rows.slice(0, 10)),
     rows.length > 10 ? h('details', { class: 'table-toggle' }, h('summary', {}, `Show ${rows.length - 10} more`), list(rows.slice(10))) : null,
-    h('p', { class: 'card-foot' }, 'Expected income is counted here on its date. Automatic set-asides stop at zero rather than taking spending money below it.'));
+    h('p', { class: 'card-foot' }, 'Tap a payment to change just that one. Expected income is counted here on its date. Automatic set-asides stop at zero rather than taking spending money below it.'));
 }
 
 // ---------- Recurring and planned payments ----------
@@ -109,7 +118,9 @@ function ruleRow(ctx, state, { rule, due, next }, today) {
   const fund = rule.kind === 'expense' && fundOf(rule) ? fundGoal(state, rule) : null;
   const parts = [repeatWords(rule), categoryName(state, rule.categoryId)];
   if (rule.endAfter > 0) parts.push(`${settledCount(state, rule).paid} of ${rule.endAfter} paid`);
-  if (fund) parts.push(`${ctx.money(Math.max(0, potBalance(state, fund)))} of ${ctx.money(rule.amount)} set aside`);
+  const coming = due[0] ?? next;
+  if (coming && coming.amount !== rule.amount) parts.push(`${ctx.money(coming.amount)} this time`);
+  if (fund) parts.push(`${ctx.money(Math.max(0, potBalance(state, fund)))} of ${ctx.money(coming?.amount ?? rule.amount)} set aside`);
   return h('button', { type: 'button', class: 'tx-row', dataset: { rule: rule.id }, onclick: () => ruleDialog(ctx, rule, !!rule.planned) },
     initialBadge(rule.name),
     h('span', { class: 'tx-main' },
@@ -243,7 +254,7 @@ export function ruleDialog(ctx, rule = null, planned = false) {
       endsField,
       fundField,
       rule && repeatOf(rule).type !== 'once' ? checkbox('paused', 'Paused (nothing waits for you while it’s paused)', rule.paused) : null,
-      h('p', { class: 'field-hint' }, 'On its day it shows under To confirm, where you mark it paid, skip it or postpone it.')),
+      h('p', { class: 'field-hint' }, 'On its day it shows under To confirm, where you mark it paid, skip it or postpone it. To change just one payment, tap it in “The next 60 days”.')),
     extraActions,
     onSubmit(data) {
       const name = String(data.get('name')).trim();
@@ -309,6 +320,7 @@ export function ruleDialog(ctx, rule = null, planned = false) {
       const saved = ctx.store.save('recurring', {
         ...rule, name, kind, amount, categoryId, startDate, repeat: repeatValue, endDate: lastDate, endAfter, fund: fundValue, planned, paused, resumeDate,
         moved: changed ? {} : rule?.moved ?? {},
+        amounts: changed ? {} : rule?.amounts ?? {},
       });
 
       // The money set aside for it lives in its own hidden set-aside.
@@ -376,7 +388,8 @@ function wishCard(ctx, state, goal, today) {
   const schedule = scheduleText(ctx, state, goal);
   const funding = goal.auto && schedule ? `Automatically: ${schedule}` : schedule ? `From your income: ${schedule}` : 'From your income, when you split it';
   let ready;
-  if (info.ready === 'now') ready = h('p', { class: 'goal-note good' }, icon('check', 'icon-sm'), 'Fully set aside. Ready to buy.');
+  if (info.ready !== 'now' && isSnoozed(goal, monthOf(today))) ready = h('p', { class: 'goal-note' }, icon('clock', 'icon-sm'), `Snoozed for ${formatMonthName(monthOf(today))}: nothing goes into it this month.`);
+  else if (info.ready === 'now') ready = h('p', { class: 'goal-note good' }, icon('check', 'icon-sm'), 'Fully set aside. Ready to buy.');
   else if (info.ready) ready = h('p', { class: 'goal-note' }, `Ready around ${formatMonth(info.ready)}, at about ${ctx.money(info.perMonth)} a month`);
   else ready = h('p', { class: 'goal-note' }, `${ctx.money(info.remaining)} to go. Nothing is going into it yet.`);
   const tick = h('input', {
@@ -402,7 +415,8 @@ function wishCard(ctx, state, goal, today) {
     h('div', { class: 'btn-row' },
       h('button', { type: 'button', class: 'btn btn-primary btn-sm', onclick: () => contributionDialog(ctx, goal, 1) }, icon('plus'), 'Add money'),
       h('button', { type: 'button', class: 'btn btn-sm', onclick: () => boughtDialog(ctx, goal) }, 'Bought'),
-      info.saved > 0 ? h('button', { type: 'button', class: 'btn btn-sm', onclick: () => contributionDialog(ctx, goal, -1) }, 'Withdraw') : null));
+      info.saved > 0 ? h('button', { type: 'button', class: 'btn btn-sm', onclick: () => contributionDialog(ctx, goal, -1) }, 'Withdraw') : null,
+      snoozeControl(ctx, state, goal, today)));
 }
 
 export function wishDialog(ctx, goal = null) {
@@ -518,7 +532,7 @@ function rangeCard(ctx, state, range, today) {
   const added = inRange(state.transactions, range).filter((t) => t.recurringId).sort(byNewest);
   const coming = occurrencesBetween(state, span.from, span.to);
   const done = totals(added);
-  const ahead = totals(coming.map(({ rule }) => rule));
+  const ahead = totals(coming.map((o) => ({ kind: o.rule.kind, amount: o.amount })));
   const line = (label, count, sums) => h('p', { class: 'range-line' }, h('b', {}, label), ` ${count} ${count === 1 ? 'entry' : 'entries'}`,
     sums.expense ? ` · ${ctx.money(sums.expense)} out` : '', sums.income ? ` · ${ctx.money(sums.income)} in` : '');
   const more = (list) => (list.length > 6 ? h('p', { class: 'range-more' }, `And ${list.length - 6} more.`) : null);
@@ -528,10 +542,10 @@ function rangeCard(ctx, state, range, today) {
     more(added),
     line('Still to confirm or to come:', coming.length, ahead),
     coming.length
-      ? h('ul', { class: 'upcoming range-upcoming' }, coming.slice(0, 6).map(({ rule, date }) => h('li', {},
+      ? h('ul', { class: 'upcoming range-upcoming' }, coming.slice(0, 6).map(({ rule, date, amount }) => h('li', {},
         h('span', { class: 'upcoming-date' }, formatShortDate(date)),
         h('span', { class: 'upcoming-name' }, rule.name),
-        signedAmount(ctx, rule.kind, rule.amount))))
+        signedAmount(ctx, rule.kind, amount))))
       : null,
     more(coming));
 }

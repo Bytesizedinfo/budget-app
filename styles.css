@@ -1102,3 +1102,16 @@ button.plan-line:hover { background: var(--surface-2); border-radius: 8px; }
   .tl-head span:nth-child(4) { display: none; }
   .amounts-row { grid-template-columns: minmax(0, 1fr) 112px; }
 }
+
+/* ---------- Home sections, changing one payment, snooze ---------- */
+
+.home-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; align-items: stretch; }
+.home-wide { grid-column: 1 / -1; }
+.home-customise { justify-self: center; color: var(--accent-text); }
+.home-order { list-style: none; margin: 0; padding: 0; display: grid; }
+.home-order li { display: flex; align-items: center; gap: 6px; padding: 6px 0; border-bottom: 1px solid var(--grid); }
+.home-order .checkbox { flex: 1; }
+.tl-edit { text-align: left; font-weight: 550; text-decoration: none; color: var(--ink); border-bottom: 1px dashed var(--axis); justify-self: start; }
+.tl-edit:hover { color: var(--accent-text); border-bottom-color: var(--accent); }
+.snoozed-note { color: var(--warn-text); }
+@media (max-width: 759px) { .home-grid { grid-template-columns: minmax(0, 1fr); } }

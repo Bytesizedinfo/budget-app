@@ -267,7 +267,7 @@ step('the overview leads with what is safe to spend, by period, and the total ba
 step('what you’d have left sits next to safe to spend and explains itself', async () => {
   const card = await until(() => $('.left-card'), 'the left card');
   expect(/What you’d have left/.test(card.textContent) && /a day/.test($('.perday-perday').textContent), card.textContent);
-  expect(card.parentElement.classList.contains('hero-row'), 'beside the safe-to-spend card');
+  expect(card.parentElement.classList.contains('home-grid') && $('.home-grid > [data-home="safe"]'), 'in the home grid with the safe-to-spend card');
   expect($('[data-left="planned"]') && $('[data-left="wishes"]'), 'the planned and wishlist switches');
   button('How is this worked out?', card).click();
   const dialog = await openDialog();
@@ -682,6 +682,67 @@ step('the keypad adds sums like a calculator', async () => {
   expect(dialog.querySelector('[name="amount"]').value === '16.00', dialog.querySelector('[name="amount"]').value);
   button('Cancel', dialog).click();
   await dialogClosed();
+});
+
+
+step('one upcoming payment can be changed without touching the rest', async () => {
+  await go('recurring');
+  const row = () => $$('.tl-row').find((r) => r.textContent.includes('Streaming') || r.textContent.includes('Rent'));
+  const target = await until(() => $$('.tl-edit').find((b) => /Rent|Streaming|Gym membership|Phone plan/.test(b.textContent)), 'a payment in the timeline');
+  const name = target.textContent;
+  target.click();
+  const dialog = await openDialog();
+  expect(/Just this one/.test(dialog.textContent), dialog.textContent.slice(0, 120));
+  fill(dialog, 'amount', '77.77');
+  submit(dialog);
+  await dialogClosed();
+  await until(() => $$('.tl-row').some((r) => r.textContent.includes(name) && r.textContent.includes('77.77') && /usually/.test(r.textContent)), 'the timeline shows this one’s amount');
+  await until(() => $$('.recurring-card .tx-row').some((r) => r.textContent.includes(name) && /77\.77 this time/.test(r.textContent)), 'the payment’s row says it’s different this time');
+  expect(row() || true, 'rows still listed');
+});
+
+step('a set-aside can be snoozed for the month and resumed', async () => {
+  await go('plan');
+  const snooze = [...goalCard('Emergency fund').querySelectorAll('button')].find((b) => b.textContent.startsWith('Snooze'));
+  expect(snooze, 'a snooze button');
+  snooze.click();
+  await until(() => /Snoozed for/.test(goalCard('Emergency fund').textContent) && button('Resume', goalCard('Emergency fund')), 'snoozed');
+  // New income asks nothing for it this month.
+  $('.btn-add').click();
+  let dialog = await openDialog();
+  dialog.querySelectorAll('.segmented input')[1].click();
+  fill(dialog, 'amount', '500');
+  fill(dialog, 'note', 'UI check snooze pay');
+  submit(dialog);
+  dialog = await until(() => $('dialog[open]')?.textContent.includes('Where should this go?') && $('dialog[open]'), 'the split dialog');
+  dialog.querySelector('[data-preset="default"]').click();
+  await until(() => /Snoozed this month/.test(dialog.textContent), 'the split says it’s snoozed');
+  expect(dialog.querySelector('[name="amt-demo-goal-emergency"]').value === '', 'nothing filled in for it');
+  button('Keep it all', dialog).click();
+  await dialogClosed();
+  button('Resume', goalCard('Emergency fund')).click();
+  await until(() => !/Snoozed for/.test(goalCard('Emergency fund').textContent), 'resumed');
+});
+
+step('the home page can be rearranged and sections hidden', async () => {
+  await go('dashboard');
+  const ids = () => $$('.home-grid > [data-home]').map((el) => el.dataset.home);
+  expect(ids()[0] === 'left' && ids().includes('budgets'), ids().join(','));
+  button('Customise this page').click();
+  let dialog = await openDialog();
+  dialog.querySelector('[data-move="balance-1"]').click();
+  await until(() => dialog.querySelectorAll('.home-order li')[1].dataset.section === 'balance', 'balance moved up');
+  dialog.querySelector('[data-move="balance-1"]').click();
+  await until(() => dialog.querySelectorAll('.home-order li')[0].dataset.section === 'balance', 'balance first');
+  dialog.querySelector('[name="show-budgets"]').click();
+  submit(dialog);
+  await dialogClosed();
+  await until(() => ids()[0] === 'balance' && !ids().includes('budgets'), () => `the new order (${ids().join(',')})`);
+  button('Customise this page').click();
+  dialog = await openDialog();
+  button('Reset', dialog).click();
+  await dialogClosed();
+  await until(() => ids()[0] === 'left' && ids().includes('budgets'), 'back to the usual order');
 });
 
 step('the phone bar: Home, Activity, add, Budget, Upcoming; the rest in the menu', async () => {
