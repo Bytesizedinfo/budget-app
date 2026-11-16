@@ -11,13 +11,15 @@ import { setAsideIn } from '../pots.js';
 import { card, notice, openDialog, remember, remembered, segmented, timeframePicker, viewHead } from '../ui.js';
 import { amountsDialog, categoriesSection } from './budgets.js';
 import { setAsidesSection } from './plan.js';
+import { savingsSection } from './savings.js';
 
-const SECTIONS = [['plan', 'Month plan'], ['categories', 'Categories'], ['setasides', 'Set-asides']];
+const SECTIONS = [['plan', 'Month plan'], ['categories', 'Categories'], ['setasides', 'Set-asides'], ['savings', 'Savings']];
 
 export function renderBudget(ctx) {
   ctx.ui.budgetTab ??= remembered('budget-tab', 'plan');
   const tab = SECTIONS.some(([id]) => id === ctx.ui.budgetTab) ? ctx.ui.budgetTab : 'plan';
-  const body = tab === 'categories' ? categoriesSection(ctx) : tab === 'setasides' ? setAsidesSection(ctx) : planSection(ctx);
+  const sections = { categories: categoriesSection, setasides: setAsidesSection, savings: savingsSection, plan: planSection };
+  const body = sections[tab](ctx);
   return h('div', { class: 'view' },
     viewHead(ctx, 'Budget', { actions: [timeframePicker(ctx)] }),
     segmented('budget-tab', SECTIONS, tab, (next) => {
@@ -42,6 +44,7 @@ function planSection(ctx) {
     h('span', { class: 'plan-label' }, label, sub ? h('span', { class: 'plan-sub' }, sub) : null),
     h('span', { class: 'plan-amount' }, amount));
   const minus = (cents) => (cents ? `− ${ctx.money(cents)}` : ctx.money(0));
+  const fromIncome = plan.expected.source === 'planned' ? 'from splitting your income (done and planned)' : 'from your default splits';
 
   const parts = [
     { name: 'Recurring payments', value: plan.recurring.total, cls: 's2' },
@@ -62,13 +65,13 @@ function planSection(ctx) {
     card({ title: `Your plan for ${formatMonth(month)}`, cls: 'month-plan' },
       h('div', { class: 'plan-lines' },
         line('Expected income', ctx.money(plan.expected.amount),
-          `${plan.expected.custom ? 'Your figure' : 'What came in last month'}${month === current ? ` · ${ctx.money(plan.expected.soFar)} has come in so far` : ''}`,
+          `${{ custom: 'Your figure', planned: 'From your planned income', last: 'What came in last month' }[plan.expected.source]}${month === current ? ` · ${ctx.money(plan.expected.soFar)} has come in so far` : ''}`,
           () => expectedDialog(ctx, month, plan), 'plan-income'),
         line('Recurring payments', minus(plan.recurring.total), `${plan.recurring.items.length} in ${name}`, () => paymentsSheet(ctx, plan, false)),
         line('Planned payments', minus(plan.planned.total), `${plan.planned.items.length} in ${name}`, () => paymentsSheet(ctx, plan, true)),
         plan.covered ? line('Already set aside for those', `+ ${ctx.money(plan.covered)}`, 'Paid from money put aside for them', () => setAsideSheet(ctx, state, plan)) : null,
-        line('Set-asides', minus(plan.setAsides.total), plan.setAsides.auto ? `${ctx.money(plan.setAsides.split)} from your default splits · ${ctx.money(plan.setAsides.auto)} moved automatically` : 'From your default splits', () => setAsideSheet(ctx, state, plan)),
-        line('Category budgets', minus(plan.categories.total), plan.categories.items.length ? 'Beyond the payments already counted in them' : 'None set yet', () => amountsDialog(ctx, month)),
+        line('Set-asides', minus(plan.setAsides.total), plan.setAsides.auto ? `${ctx.money(plan.setAsides.split)} ${fromIncome} · ${ctx.money(plan.setAsides.auto)} moved automatically` : `${fromIncome.charAt(0).toUpperCase()}${fromIncome.slice(1)}`, () => setAsideSheet(ctx, state, plan)),
+        line('Category budgets', minus(plan.categories.total), plan.categories.items.length ? `${plan.expected.source === 'planned' ? 'What your income gives each category, beyond' : 'Beyond'} the payments already counted in them` : 'None set yet', () => amountsDialog(ctx, month)),
         h('div', { class: `plan-line plan-total${over ? ' bad' : ''}` },
           h('span', { class: 'plan-label' }, over ? 'Over-planned by' : 'Left unbudgeted', h('span', { class: 'plan-sub' }, over ? 'Your plan needs more than the income you expect' : `About ${ctx.money(plan.perDay)} a day to spend freely`)),
           h('span', { class: 'plan-amount' }, ctx.money(Math.abs(plan.left))))),
@@ -113,8 +116,9 @@ function expectedDialog(ctx, month, plan) {
     title: `Expected income: ${formatMonth(month)}`,
     content: h('div', { class: 'form-grid' },
       h('label', { class: 'field' }, h('span', { class: 'field-label' }, 'How much you expect to come in'), input,
-        h('span', { class: 'field-hint' }, 'It starts as what came in last month. Your own figure is kept for this month only.')),
+        h('span', { class: 'field-hint' }, 'It starts as your planned and recurring income for the month, or what came in last month if none is planned. Your own figure is kept for this month only.')),
       h('div', { class: 'btn-row' },
+        e.planned !== null ? h('button', { type: 'button', class: 'btn btn-sm', onclick: use(e.planned) }, `Planned income · ${ctx.money(e.planned)}`) : null,
         h('button', { type: 'button', class: 'btn btn-sm', onclick: use(e.lastMonth) }, `Last month · ${ctx.money(e.lastMonth)}`),
         e.average ? h('button', { type: 'button', class: 'btn btn-sm', onclick: use(e.average) }, `Recent average · ${ctx.money(e.average)}`) : null)),
     extraActions: e.custom
@@ -126,9 +130,9 @@ function expectedDialog(ctx, month, plan) {
           delete next[month];
           ctx.store.setSettings({ expected: next });
           dialog.close();
-          ctx.toast('Back to last month’s income');
+          ctx.toast('Your own figure removed');
         },
-      }, 'Use last month’s')]
+      }, 'Remove my figure')]
       : [],
     onSubmit(data) {
       const text = String(data.get('expected') ?? '').trim();

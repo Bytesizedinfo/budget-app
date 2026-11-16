@@ -71,15 +71,91 @@ export function rangeMonths(range, state, today) {
   return monthsCovered(span.from, span.to);
 }
 
-// period: a month ("2026-11") or a time frame. scale: how many months it covers, so each monthly budget is
-// compared with spending over the same stretch (S$300 a month is S$450 over a month and a half).
-export function budgetSummary(state, period, scale = 1) {
+// ---------- Category budgets ----------
+// Each spending category has a usual monthly amount (`monthlyBudget`). When income is split, part of it can be
+// given to categories (`cats: { categoryId: cents }` on the income entry): that becomes the category's budget
+// for the month the income counts in. Budgeted money isn't set aside; it stays part of spending money.
+// Moving money between categories adjusts one month's budgets (`adjust: { 'YYYY-MM': cents }` on the category).
+
+// What an income entry gives to spending categories, or null if nothing.
+export const catsOf = (t) => (t.kind === 'income' && t.cats !== null && typeof t.cats === 'object' ? t.cats : null);
+
+// How much of an income entry is budgeted to spending categories (ones that still exist).
+export function catsTotal(state, t) {
+  const cats = catsOf(t);
+  if (!cats) return 0;
+  return state.categories.reduce((sum, c) => sum + (c.kind === 'expense' && cats[c.id] > 0 ? cats[c.id] : 0), 0);
+}
+
+// What income has given each spending category in a month: Map(categoryId -> cents).
+export function givenToCategories(state, month, exceptId = null) {
+  const ids = new Set(state.categories.filter((c) => c.kind === 'expense').map((c) => c.id));
+  const given = new Map();
+  for (const t of state.transactions) {
+    const cats = catsOf(t);
+    if (!cats || t.id === exceptId || typeof t.date !== 'string' || monthKey(t) !== month) continue;
+    for (const [id, cents] of Object.entries(cats)) if (ids.has(id) && cents > 0) given.set(id, (given.get(id) ?? 0) + cents);
+  }
+  return given;
+}
+
+// Each spending category's budget for one month: Map(categoryId -> { budget, usual, given, fromIncome, adjust }).
+// The budget is what the month's income gave it; in a month where income gave nothing to any category, it's
+// the usual monthly amount. Money moved between categories that month is added on. null means no budget.
+// extra: more given amounts to count (income that is planned but hasn't arrived), for the month plan.
+export function categoryBudgets(state, month, extra = null) {
+  const given = givenToCategories(state, month);
+  if (extra) for (const [id, cents] of extra) if (cents > 0) given.set(id, (given.get(id) ?? 0) + cents);
+  const fromIncome = given.size > 0;
+  const out = new Map();
+  for (const c of state.categories) {
+    if (c.kind !== 'expense') continue;
+    const usual = Number.isSafeInteger(c.monthlyBudget) ? c.monthlyBudget : null;
+    const adjust = Number.isSafeInteger(c.adjust?.[month]) ? c.adjust[month] : 0;
+    let base = usual;
+    if (fromIncome) base = given.has(c.id) ? given.get(c.id) : usual !== null ? 0 : null;
+    const budget = base === null ? (adjust > 0 ? adjust : null) : Math.max(0, base + adjust);
+    out.set(c.id, { budget, usual, given: given.get(c.id) ?? 0, fromIncome, adjust });
+  }
+  return out;
+}
+
+// period: a month ("2026-11") or a time frame. For a whole month, each category's budget is that month's.
+// For any other stretch, pass its span ({ from, to }) and each month's budget counts for the part of the month
+// the stretch covers (S$300 a month is S$450 over a month and a half). Without a span, the usual amounts are
+// multiplied by scale (how many months the stretch covers).
+export function budgetSummary(state, period, scale = 1, span = null) {
   const spent = spendByCategory(typeof period === 'string' ? inMonth(state.transactions, period) : inRange(state.transactions, period));
-  const rows = sortCategories(state.categories.filter((c) => c.kind === 'expense' && (!c.archived || spent.has(c.id)))).map((category) => ({
-    category,
-    spent: spent.get(category.id) ?? 0,
-    budget: Number.isSafeInteger(category.monthlyBudget) ? Math.round(category.monthlyBudget * scale) : null,
-  }));
+  const month = typeof period === 'string' ? period : period.month ?? null;
+  const budgets = new Map();
+  if (month) for (const [id, b] of categoryBudgets(state, month)) budgets.set(id, b);
+  else if (span) {
+    for (const m of monthRange(monthOf(span.from), monthOf(span.to))) {
+      const first = m === monthOf(span.from) ? dayOf(span.from) : 1;
+      const last = m === monthOf(span.to) ? dayOf(span.to) : daysInMonth(m);
+      const part = (last - first + 1) / daysInMonth(m);
+      for (const [id, b] of categoryBudgets(state, m)) {
+        const sofar = budgets.get(id) ?? { budget: null, usual: b.usual, given: 0, fromIncome: false, adjust: 0 };
+        if (b.budget !== null) sofar.budget = (sofar.budget ?? 0) + b.budget * part;
+        sofar.given += b.given * part;
+        sofar.fromIncome ||= b.fromIncome;
+        budgets.set(id, sofar);
+      }
+    }
+    for (const b of budgets.values()) {
+      if (b.budget !== null) b.budget = Math.round(b.budget);
+      b.given = Math.round(b.given);
+    }
+  }
+  const budgetOf = (category) => {
+    if (budgets.has(category.id)) return budgets.get(category.id);
+    const usual = Number.isSafeInteger(category.monthlyBudget) ? category.monthlyBudget : null;
+    return { budget: usual === null ? null : Math.round(usual * scale), usual, given: 0, fromIncome: false, adjust: 0 };
+  };
+  const rows = sortCategories(state.categories.filter((c) => c.kind === 'expense' && (!c.archived || spent.has(c.id)))).map((category) => {
+    const b = budgetOf(category);
+    return { category, spent: spent.get(category.id) ?? 0, budget: b.budget, usual: b.usual, given: b.given, fromIncome: b.fromIncome, adjust: b.adjust };
+  });
   const shown = new Set(rows.map((r) => r.category.id));
   let totalBudget = 0;
   let budgetedSpent = 0;

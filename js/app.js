@@ -15,6 +15,7 @@ import { renderDashboard } from './views/dashboard.js';
 import { renderInsights } from './views/insights.js';
 import { renderMore } from './views/more.js';
 import { renderReports } from './views/reports.js';
+import { renderSavings } from './views/savings.js';
 import { renderSettings } from './views/settings.js';
 import { renderSetup } from './views/setup.js';
 import { renderUpcoming } from './views/upcoming.js';
@@ -24,6 +25,7 @@ const NAV = [
   { route: 'activity', label: 'Activity', icon: 'list', render: renderActivity },
   { route: 'budget', label: 'Budget', icon: 'budget', render: renderBudget },
   { route: 'upcoming', label: 'Upcoming', icon: 'repeat', render: renderUpcoming },
+  { route: 'savings', label: 'Savings', icon: 'target', render: renderSavings },
   { route: 'insights', label: 'Insights', icon: 'trend', render: renderInsights },
   { route: 'reports', label: 'Reports', icon: 'chart', render: renderReports },
   { route: 'settings', label: 'Settings', icon: 'settings', render: renderSettings },
@@ -40,7 +42,7 @@ const OLD_LINKS = {
 };
 // The phone's bottom bar: two pages either side of the add button. The rest sit behind the menu in the top bar.
 const TABS = ['dashboard', 'activity', null, 'budget', 'upcoming'];
-const UNDER_MORE = new Set(['insights', 'reports', 'settings', 'more']);
+const UNDER_MORE = new Set(['savings', 'insights', 'reports', 'settings', 'more']);
 
 const demo = new URLSearchParams(location.search).has('demo');
 const store = createStore();
@@ -125,7 +127,7 @@ function buildShell() {
           h('span', { class: 'spacer' }),
           themeToggle(),
           syncPill(ctx),
-          h('a', { class: 'icon-btn menu-btn', href: '#/more', dataset: { route: 'more' }, 'aria-label': 'Menu: Insights, Reports and Settings', title: 'Menu' }, icon('menu')),
+          h('a', { class: 'icon-btn menu-btn', href: '#/more', dataset: { route: 'more' }, 'aria-label': 'Menu: Savings, Insights, Reports and Settings', title: 'Menu' }, icon('menu')),
           h('button', { type: 'button', class: 'btn btn-primary btn-add', onclick: add }, icon('plus'), 'Add transaction')),
         main)),
     h('nav', { class: 'tabbar', 'aria-label': 'Main' }, TABS.map((route) => (route

@@ -2,7 +2,7 @@
 // 50/30/20 preset), what one income entry should be split into, what a pay amount would leave, and how the
 // plan compares with what was actually set aside.
 
-import { byNewest, monthKey, potBalance, potEntries, spendPerDay, splitOf, trend } from './calc.js';
+import { byNewest, givenToCategories, monthKey, potBalance, potEntries, spendPerDay, splitOf, trend } from './calc.js';
 import { addDays, addMonths, dateInMonth, dayOf, daysInMonth, isValidDate, monthOf, monthRange } from './dates.js';
 
 // A set-aside can also be a wishlist item (`wish` on the goal: its target is the price) or the money held for
@@ -177,6 +177,59 @@ export function setAsideInMonth(state, goal, month, exceptId = null) {
 //         still missing this month (alreadyIn); nothing is asked beyond a target.
 //   give: what fits once the set-asides above have taken theirs. With the 50/30/20 ratio, everything comes out
 //         of the savings part, and what's left of it goes to the ratio's chosen set-aside (`rest` on its row).
+// Spending categories in the order income fills them: needs first, then ones not sorted yet, then wants.
+export function budgetOrder(state) {
+  const rank = (c) => (c.need === true ? 0 : c.need === false ? 2 : 1);
+  return state.categories.filter((c) => c.kind === 'expense' && !c.archived).sort((a, b) => rank(a) - rank(b) || a.name.localeCompare(b.name));
+}
+
+// What an income entry gives to spending categories after its set-asides: each category's usual monthly
+// amount, less what income already gave it this month, for as long as the money lasts.
+// extra: more to count as already given (income planned earlier in the same month).
+function allocateCats(state, income, available, extra = null) {
+  const given = givenToCategories(state, monthKey(income), income.id);
+  let left = available;
+  const cats = budgetOrder(state).map((category) => {
+    const usual = Number.isSafeInteger(category.monthlyBudget) ? category.monthlyBudget : 0;
+    const already = (given.get(category.id) ?? 0) + (extra?.get(category.id) ?? 0);
+    const want = Math.max(0, usual - already);
+    const give = Math.min(want, left);
+    left -= give;
+    return { category, usual, already, want, give };
+  });
+  return { cats, budgeted: available - left, unbudgeted: left };
+}
+
+// The split planned ahead for an income that comes from a recurring or planned payment (`planSplit` on the
+// rule: { goals: { setAsideId: cents }, cats: { categoryId: cents } }), applied to the amount that arrived.
+// A smaller amount is filled from the top: set-asides in priority order, then categories. Null if none.
+export function plannedSplit(state, income) {
+  const plan = state.recurring.find((r) => r.id === income.recurringId && r.kind === 'income')?.planSplit;
+  if (!plan || typeof plan !== 'object') return null;
+  const own = splitOf(income) ?? {};
+  let left = income.amount;
+  const rows = sortedGoals(state).map((goal) => {
+    let want = plan.goals?.[goal.id] > 0 ? plan.goals[goal.id] : 0;
+    let toTarget = null;
+    if (goal.target > 0) {
+      toTarget = Math.max(0, goal.target - (potBalance(state, goal) - (own[goal.id] > 0 ? own[goal.id] : 0)));
+      want = Math.min(want, toTarget);
+    }
+    const give = Math.min(want, left);
+    left -= give;
+    return { goal, rule: null, want, give, already: 0, toTarget, rest: 0, snoozed: false };
+  });
+  const keep = left;
+  const cats = budgetOrder(state).map((category) => {
+    const want = plan.cats?.[category.id] > 0 ? plan.cats[category.id] : 0;
+    const give = Math.min(want, left);
+    left -= give;
+    return { category, usual: Number.isSafeInteger(category.monthlyBudget) ? category.monthlyBudget : 0, already: 0, want, give };
+  });
+  const short = rows.reduce((sum, r) => sum + r.want - r.give, 0) + cats.reduce((sum, r) => sum + r.want - r.give, 0);
+  return { rows, setAside: income.amount - keep, keep, short, cats, budgeted: keep - left, unbudgeted: left, source: 'planned', inherited: false, ratio: null };
+}
+
 function allocate(state, income, split, alreadyIn, own = {}) {
   const month = monthKey(income);
   let left = income.amount;
@@ -217,11 +270,21 @@ function allocate(state, income, split, alreadyIn, own = {}) {
   return { rows, setAside: income.amount - left, keep: left, short: rows.reduce((sum, r) => sum + r.want - r.give, 0) };
 }
 
-// What a split (the income's default one unless given) asks of one income entry.
-export function planSplit(state, income, split = defaultSplit(state, income.categoryId)) {
+// What a split asks of one income entry: its set-asides (rows), then its spending categories (cats).
+//   keep: what isn't set aside.   budgeted: the part of that given to categories.   unbudgeted: the rest.
+// Without a split given, the income's planned split is used if it has one, else its default split.
+// running: { goals: Map, cats: Map } of amounts to count as already put in this month (income planned
+// earlier in the same month), for working out a whole month's plan.
+export function planSplit(state, income, split = null, running = null) {
+  if (!split) {
+    const planned = plannedSplit(state, income);
+    if (planned) return planned;
+    split = defaultSplit(state, income.categoryId);
+  }
   const own = splitOf(income) ?? {};
-  const result = allocate(state, income, split, (goal, month) => setAsideInMonth(state, goal, month, income.id), own);
-  return { ...result, source: split.source, inherited: split.inherited, ratio: split.ratio };
+  const already = (goal, month) => setAsideInMonth(state, goal, month, income.id) + (running?.goals.get(goal.id) ?? 0);
+  const result = allocate(state, income, split, already, own);
+  return { ...result, ...allocateCats(state, income, result.keep, running?.cats), source: split.source, inherited: split.inherited, ratio: split.ratio };
 }
 
 // The presets offered when splitting: the income's default, each goal on its schedule, and the 50/30/20 ratio.
@@ -342,6 +405,6 @@ export function incomeMonths(state, today) {
 // splitting was first used so older income isn't brought up.
 export function toSplit(state) {
   const since = state.settings.splitSince;
-  if (!since || !sortedGoals(state).length) return [];
+  if (!since) return [];
   return state.transactions.filter((t) => t.kind === 'income' && !t.split && typeof t.date === 'string' && t.date >= since).sort(byNewest);
 }

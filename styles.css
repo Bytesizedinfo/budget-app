@@ -1115,3 +1115,32 @@ button.plan-line:hover { background: var(--surface-2); border-radius: 8px; }
 .tl-edit:hover { color: var(--accent-text); border-bottom-color: var(--accent); }
 .snoozed-note { color: var(--warn-text); }
 @media (max-width: 759px) { .home-grid { grid-template-columns: minmax(0, 1fr); } }
+
+/* ---------- The grouped split box, moving money, savings ---------- */
+
+.split-group { display: grid; gap: 4px; }
+.split-title { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; font-size: 14px; font-weight: 700; margin-top: 4px; }
+.split-hint { font-size: 12.5px; font-weight: 400; color: var(--muted); }
+.split-more > .split-rows { margin-top: 8px; }
+.split-totals { display: grid; gap: 4px; padding-top: 10px; border-top: 1px solid var(--axis); }
+.split-line { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; font-size: 14px; color: var(--ink-2); }
+.split-line b { font-variant-numeric: tabular-nums; color: var(--ink); }
+.split-sub-line { padding-left: 14px; font-size: 13.5px; }
+.split-unbudgeted b.bad, .split-keep b.bad { color: var(--critical-text); }
+.cat-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 4px 8px; }
+.cat-row + .cat-row { border-top: 1px solid var(--grid); }
+.cat-row > .row-btn { border-top: 0; }
+.cat-actions { display: flex; gap: 4px; padding-right: 8px; }
+.budget-given { display: block; font-size: 12.5px; color: var(--muted); margin-top: 2px; }
+.move-effect { display: grid; gap: 4px; }
+.move-effect p:not(.field-hint) { display: flex; justify-content: space-between; gap: 12px; font-size: 14px; }
+.move-effect p span:last-child { font-variant-numeric: tabular-nums; font-weight: 600; }
+.badge-savings { background: color-mix(in srgb, var(--series-3) 18%, transparent); color: var(--good-text); }
+.choose-list { display: grid; gap: 8px; }
+.savings-total .totals { margin-top: 12px; }
+@media (max-width: 599px) {
+  .cat-row { grid-template-columns: minmax(0, 1fr); }
+  .cat-actions { padding: 0 12px 8px; }
+}
+
+.savings-total .range-note { margin: 10px 0 2px; }

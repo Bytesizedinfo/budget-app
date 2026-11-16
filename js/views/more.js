@@ -3,6 +3,7 @@ import { card, viewHead } from '../ui.js';
 
 // The menu in the top bar: the pages that don't fit in the phone's bottom bar.
 const LINKS = [
+  ['savings', 'Savings', 'target'],
   ['insights', 'Insights', 'trend'],
   ['reports', 'Reports', 'chart'],
   ['settings', 'Settings', 'settings'],

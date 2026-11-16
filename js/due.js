@@ -6,7 +6,6 @@ import { addDays, formatDate, formatShortDate, isValidDate, todayISO } from './d
 import { h } from './dom.js';
 import { fundGoal } from './forecast.js';
 import { centsToInput, parseAmount } from './money.js';
-import { sortedGoals } from './pots.js';
 import { dueList, occurrenceTransaction } from './recurring.js';
 import { splitDialog } from './split.js';
 import { card, confirmDialog, field, openDialog, signedAmount } from './ui.js';
@@ -47,7 +46,7 @@ export function paidDialog(ctx, occ) {
       }
       const saved = ctx.store.save('transactions', occurrenceTransaction({ ...occ, rule }, extra));
       ctx.toast(income ? `${rule.name} recorded` : `${rule.name} recorded${extra.potId ? ' · paid from its set-aside' : ''}`);
-      if (income && sortedGoals(ctx.store.get()).length) setTimeout(() => splitDialog(ctx, saved), 0);
+      if (income) setTimeout(() => splitDialog(ctx, saved), 0);
     },
   });
 }

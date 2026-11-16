@@ -2,9 +2,9 @@
 // be left this month, the month plan, and wishlist maths. Everything here reads the same list of payments and
 // set-asides, so the home page, the timeline and the plan can't disagree.
 
-import { balance, inMonth, potBalance, potEntries, totals } from './calc.js';
+import { balance, categoryBudgets, inMonth, potBalance, potEntries, splitTotal, totals } from './calc.js';
 import { addDays, addMonths, dateInMonth, daysInMonth, isValidDate, monthOf } from './dates.js';
-import { incomeMonths, isAuto, isBillFund, isClosed, isSnoozedOn, isWish, planChecks, plannedFor, scheduleDue, setAsideInMonth, validSchedule } from './pots.js';
+import { incomeMonths, isAuto, isBillFund, isClosed, isSnoozedOn, isWish, planChecks, planSplit, plannedFor, scheduleDue, setAsideInMonth, validSchedule } from './pots.js';
 import { occurrences, stepDates } from './recurring.js';
 
 // ---------- Money set aside for a payment ----------
@@ -194,18 +194,36 @@ export function timeline(state, today, days = 60) {
 
 // ---------- The month plan ----------
 
-// Expected income for a month: the figure typed for it, or else what came in last month.
+// Recurring and planned income in a month: every occurrence that wasn't skipped, and the ones still to come.
+export function incomeIn(state, month) {
+  const all = [];
+  for (const rule of state.recurring) {
+    if (rule.kind !== 'income') continue;
+    for (const o of occurrences(state, rule, dateInMonth(month, 31))) if (o.status !== 'skipped' && monthOf(o.date) === month) all.push(o);
+  }
+  all.sort((a, b) => a.date.localeCompare(b.date));
+  return { all, open: all.filter((o) => o.status === 'open') };
+}
+
+// Expected income for a month: the figure typed for it; else, when income is planned for the month, what has
+// arrived plus what is still planned to; else what came in last month.
 export function expectedIncome(state, month, today) {
   const current = monthOf(today);
   const lastMonth = totals(inMonth(state.transactions, addMonths(current, -1))).income;
   const custom = state.settings.expected?.[month];
+  const isCustom = Number.isSafeInteger(custom) && custom >= 0;
   const typical = incomeMonths(state, today);
+  const received = totals(inMonth(state.transactions, month)).income;
+  const coming = incomeIn(state, month);
+  const planned = coming.all.length ? received + coming.open.reduce((sum, o) => sum + o.amount, 0) : null;
   return {
-    amount: Number.isSafeInteger(custom) && custom >= 0 ? custom : lastMonth,
-    custom: Number.isSafeInteger(custom) && custom >= 0,
+    amount: isCustom ? custom : planned ?? lastMonth,
+    custom: isCustom,
+    source: isCustom ? 'custom' : planned !== null ? 'planned' : 'last',
+    planned,
     lastMonth,
     average: typical?.average ?? 0,
-    soFar: month === current ? totals(inMonth(state.transactions, month)).income : 0,
+    soFar: month === current ? received : 0,
   };
 }
 
@@ -259,14 +277,40 @@ export function monthPlan(state, month, today) {
     covered += Math.min(amount, Math.max(0, held) + (autoIn.get(goal.id) ?? 0));
   }
 
-  const split = plannedFor(state, [{ id: '(plan)', kind: 'income', amount: expected.amount, categoryId: null, date: first, month }]).total;
+  // Set-asides from income. With income planned for the month: what has actually been split so far, plus
+  // the split of each income still to come (its planned split, or the default one). Otherwise, the default
+  // splits applied to the expected income.
+  const coming = incomeIn(state, month);
+  const plannedCats = new Map(); // What income still to come would give each spending category.
+  let split;
+  if (coming.all.length) {
+    split = inMonth(state.transactions, month).reduce((total, t) => total + splitTotal(state, t), 0);
+    const running = { goals: new Map(), cats: new Map() };
+    const bump = (map, id, cents) => map.set(id, (map.get(id) ?? 0) + cents);
+    for (const o of coming.open) {
+      const plan = planSplit(state, { id: `(plan ${o.id})`, kind: 'income', amount: o.amount, categoryId: o.rule.categoryId, date: o.date, recurringId: o.rule.id }, null, running);
+      split += plan.setAside;
+      for (const r of plan.rows) if (r.give) bump(running.goals, r.goal.id, r.give);
+      for (const r of plan.cats) {
+        if (!r.give) continue;
+        bump(running.cats, r.category.id, r.give);
+        bump(plannedCats, r.category.id, r.give);
+      }
+    }
+  } else split = plannedFor(state, [{ id: '(plan)', kind: 'income', amount: expected.amount, categoryId: null, date: first, month }]).total;
   const setAsides = split + auto;
 
+  // Category budgets: what the month's income gives each one (arrived and still to come), or the usual
+  // amounts in a month where income gives categories nothing.
   const inCategory = new Map();
   for (const o of due) inCategory.set(o.rule.categoryId, (inCategory.get(o.rule.categoryId) ?? 0) + o.amount);
+  const monthBudgets = categoryBudgets(state, month, plannedCats);
   const budgets = state.categories
-    .filter((c) => c.kind === 'expense' && !c.archived && Number.isSafeInteger(c.monthlyBudget))
-    .map((c) => ({ category: c, budget: c.monthlyBudget, bills: inCategory.get(c.id) ?? 0, extra: Math.max(0, c.monthlyBudget - (inCategory.get(c.id) ?? 0)) }));
+    .filter((c) => c.kind === 'expense' && !c.archived && monthBudgets.get(c.id).budget !== null)
+    .map((c) => {
+      const { budget } = monthBudgets.get(c.id);
+      return { category: c, budget, bills: inCategory.get(c.id) ?? 0, extra: Math.max(0, budget - (inCategory.get(c.id) ?? 0)) };
+    });
   const categories = budgets.reduce((total, b) => total + b.extra, 0);
 
   const left = expected.amount - sum(recurring) - sum(plannedPay) + covered - setAsides - categories;

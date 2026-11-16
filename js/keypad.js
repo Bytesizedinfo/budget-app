@@ -6,6 +6,8 @@ import { addDays, addMonths, isValidDate, monthOf, todayISO } from './dates.js';
 import { h, icon } from './dom.js';
 import { centsToInput, parseAmount } from './money.js';
 import { sortedGoals } from './pots.js';
+import { confirmDip } from './move.js';
+import { isSavings } from './savings.js';
 import { splitDialog } from './split.js';
 import { limitNote } from './tx.js';
 import { field, initialBadge, openDialog, segmented } from './ui.js';
@@ -155,7 +157,7 @@ export function quickAdd(ctx, { date = todayISO(), kind: startKind = 'expense' }
       noteList,
       countsField,
       paidField),
-    onSubmit(data) {
+    async onSubmit(data) {
       const again = another;
       another = false;
       const cents = evaluateAmount(data.get('amount'));
@@ -174,6 +176,7 @@ export function quickAdd(ctx, { date = todayISO(), kind: startKind = 'expense' }
         if (pot && cents > potBalance(latest, pot)) {
           throw new Error(`Only ${ctx.money(Math.max(0, potBalance(latest, pot)))} is in ${pot.name}. Lower the amount, move money in first, or pay from spending money.`);
         }
+        if (pot && isSavings(pot) && !(await confirmDip(ctx, pot, cents))) return false;
         if (pot) record.potId = pot.id;
       }
       ctx.ui.lastCategory[kind] = categoryId;
@@ -188,7 +191,7 @@ export function quickAdd(ctx, { date = todayISO(), kind: startKind = 'expense' }
         return false;
       }
       // New income: ask where it should go, once this dialog has closed.
-      if (kind === 'income' && pots.length) setTimeout(() => splitDialog(ctx, saved), 0);
+      if (kind === 'income') setTimeout(() => splitDialog(ctx, saved), 0);
       return true;
     },
   });

@@ -119,6 +119,29 @@ export function createStore(initial = emptyState()) {
     remove(collection, id) {
       commit({ ...state, [collection]: state[collection].filter((r) => r.id !== id), deleted: { ...state.deleted, [id]: stamp() } }, 'local');
     },
+    // Several changes as one, so they can't come apart between devices:
+    //   save: { collection: [records] }, contributions: [{ goalId, contribution }], remove: { collection: [ids] }.
+    batch({ save = {}, contributions = [], remove = {} }) {
+      const next = { ...state };
+      for (const [collection, list] of Object.entries(save)) {
+        let items = next[collection];
+        for (const record of list) items = upsert(items, { ...record, id: record.id || newId(), updatedAt: stamp() });
+        next[collection] = items;
+      }
+      if (contributions.length) {
+        next.goals = next.goals.map((g) => {
+          const mine = contributions.filter((c) => c.goalId === g.id).map((c) => ({ ...c.contribution, id: c.contribution.id || newId(), updatedAt: stamp() }));
+          return mine.length ? { ...g, contributions: [...g.contributions, ...mine], updatedAt: stamp() } : g;
+        });
+      }
+      const deleted = { ...next.deleted };
+      for (const [collection, ids] of Object.entries(remove)) {
+        next[collection] = next[collection].filter((r) => !ids.includes(r.id));
+        for (const id of ids) deleted[id] = stamp();
+      }
+      next.deleted = deleted;
+      commit(next, 'local');
+    },
     // Leaves a tombstone under an id without removing anything, e.g. to skip one occurrence of a payment.
     tombstone(id) {
       commit({ ...state, deleted: { ...state.deleted, [id]: stamp() } }, 'local');

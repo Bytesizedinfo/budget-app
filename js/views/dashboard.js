@@ -12,6 +12,7 @@ import { transactionDialog, txRow } from '../tx.js';
 import { budgetRow, card, cardLink, checkbox, empty, meter, notice, openDialog, remember, segmented, signedAmount, timeframePicker, viewHead } from '../ui.js';
 import { eventRow } from './upcoming.js';
 import { limitDialog } from './budgets.js';
+import { savingsHomeCard } from './savings.js';
 
 const RANGES = [['today', 'Today'], ['week', 'This week'], ['month', 'This month']];
 
@@ -20,6 +21,7 @@ const SECTIONS = [
   ['left', 'What you’d have left'],
   ['safe', 'Safe to spend (monthly limit)'],
   ['balance', 'Total balance'],
+  ['savings', 'Savings'],
   ['stats', 'Income, spent and net'],
   ['budgets', 'Budgets'],
   ['spending', 'Spending by category'],
@@ -27,7 +29,7 @@ const SECTIONS = [
   ['coming', 'Coming up this week'],
   ['setasides', 'Set aside'],
 ];
-const WIDE = new Set(['balance', 'stats']); // These span the page; the rest sit two to a row on a wide screen.
+const WIDE = new Set(['stats']); // This one spans the page; the rest sit two to a row on a wide screen.
 
 // The order and visibility chosen for the home page (settings.home), with any new sections added at the end.
 export function homeLayout(state) {
@@ -57,6 +59,7 @@ export function renderDashboard(ctx) {
     left: () => leftCard(ctx, state, daily, safe, month, pace(state, today)),
     safe: () => (safe ? safeHero(ctx, safe, month) : hero(ctx, budgets, month, today)),
     balance: () => balanceCard(ctx, state, today),
+    savings: () => savingsHomeCard(ctx, state, range),
     stats: () => h('div', { class: 'stack home-stats' },
       h('p', { class: 'range-note' }, icon('info', 'icon-sm'), `Income, spending, categories and recent transactions: ${timeframeText(range)}. Tap any number to see how it’s worked out.`),
       h('div', { class: 'kpis' },

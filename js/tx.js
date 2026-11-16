@@ -1,10 +1,12 @@
 // Adding, editing and deleting transactions, plus the row used to list them.
 
-import { categoriesFor, categoryName, monthKey, potBalance, safeToSpend, splitOf, splitTotal } from './calc.js';
+import { categoriesFor, categoryName, catsTotal, monthKey, potBalance, safeToSpend, splitOf, splitTotal } from './calc.js';
 import { addMonths, formatDay, formatMonthName, isValidDate, monthOf, todayISO } from './dates.js';
 import { h, icon } from './dom.js';
 import { centsToInput, parseAmount } from './money.js';
 import { quickAdd } from './keypad.js';
+import { confirmDip } from './move.js';
+import { isSavings } from './savings.js';
 import { sortedGoals } from './pots.js';
 import { splitDialog } from './split.js';
 import { field, initialBadge, openDialog, segmented, signedAmount } from './ui.js';
@@ -98,7 +100,7 @@ export function transactionDialog(ctx, tx = null) {
 
   const extraActions = [];
   if (tx) extraActions.push(h('button', { type: 'button', class: 'btn btn-ghost btn-danger', onclick: () => { dialog.close(); deleteTransaction(ctx, tx); } }, 'Delete'));
-  if (tx?.kind === 'income' && pots.length) {
+  if (tx?.kind === 'income') {
     extraActions.push(h('button', { type: 'button', class: 'btn btn-ghost', onclick: () => { dialog.close(); splitDialog(ctx, tx); } }, splitOf(tx) ? 'Change split' : 'Split'));
   }
 
@@ -107,28 +109,32 @@ export function transactionDialog(ctx, tx = null) {
     content,
     submitLabel: tx ? 'Save' : 'Add',
     extraActions,
-    onSubmit(data) {
+    async onSubmit(data) {
       const amount = parseAmount(data.get('amount'));
       if (!amount) throw new Error('Enter an amount greater than zero.');
       const date = data.get('date');
       if (!isValidDate(date)) throw new Error('Choose a valid date.');
       const categoryId = data.get('category');
-      if (!categoryId) throw new Error('Choose a category. You can add categories on the Budgets page.');
+      if (!categoryId) throw new Error('Choose a category. You can add categories on the Budget page.');
       const record = { ...tx, kind, amount, date, categoryId, note: data.get('note').trim() };
       let pot = null;
       if (kind === 'income') {
         delete record.potId;
         if (data.get('counts') === 'next') record.month = addMonths(monthOf(date), 1);
         else delete record.month;
-        const aside = tx ? splitTotal(state, tx) : 0;
-        if (aside > amount) throw new Error(`${ctx.money(aside)} of this income is set aside. Enter at least that much, or lower the split first (Change split).`);
+        const aside = tx ? splitTotal(state, tx) + catsTotal(state, tx) : 0;
+        if (aside > amount) throw new Error(`${ctx.money(aside)} of this income is set aside or budgeted. Enter at least that much, or lower the split first (Change split).`);
       } else {
         delete record.month;
         delete record.split;
+        delete record.cats;
         pot = pots.find((g) => g.id === data.get('pot')) ?? null;
         if (pot && amount > available(pot)) {
           throw new Error(`Only ${ctx.money(Math.max(0, available(pot)))} is in ${pot.name}. Lower the amount, move money in first, or pay from spending money.`);
         }
+        // More coming out of savings than before asks first.
+        const more = pot ? amount - (tx?.potId === pot.id ? tx.amount : 0) : 0;
+        if (pot && isSavings(pot) && more > 0 && !(await confirmDip(ctx, pot, more))) return false;
         if (pot) record.potId = pot.id;
         else delete record.potId;
       }
@@ -172,6 +178,7 @@ export function txRow(ctx, tx, { showDate = false } = {}) {
     counts,
     pot ? `from ${pot.name}` : null,
     aside ? `${ctx.money(aside)} set aside` : null,
+    catsTotal(state, tx) ? `${ctx.money(catsTotal(state, tx))} to categories` : null,
   ].filter(Boolean).join(' · ');
   return h('button', { type: 'button', class: 'tx-row', onclick: () => transactionDialog(ctx, tx) },
     initialBadge(name),

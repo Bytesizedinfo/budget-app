@@ -68,7 +68,7 @@ export function demoState(today) {
   state.goals = [
     {
       id: 'demo-goal-emergency', name: 'Emergency fund', target: 1500000, deadline: null, updatedAt: 1,
-      plan: { type: 'percent', value: 10 }, buffer: true,
+      plan: { type: 'percent', value: 10 }, buffer: true, savings: true,
       contributions: [{ id: 'demo-ef-start', date: start(1), amount: 150000, updatedAt: 1 }, ...monthly('demo-ef', 50000, 26)],
     },
     {

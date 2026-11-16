@@ -8,6 +8,7 @@ import { h } from '../dom.js';
 import { balanceSeries, facts, flowSeries, needsWants, pace, weekdaySpend } from '../insights.js';
 import { formatCompact } from '../money.js';
 import { planChecks } from '../pots.js';
+import { savingsFlow, savingsGoals, savingsTotal } from '../savings.js';
 import { card, empty, notice, pointList, tableToggle, timeframePicker, viewHead } from '../ui.js';
 
 const percent = new Intl.NumberFormat(undefined, { style: 'percent', maximumFractionDigits: 0 });
@@ -91,6 +92,15 @@ function insightCard(ctx, state, f, p, range, previous, today) {
       level: overN || overW ? 'warn' : 'good',
       text: `Against your ${nw.ratio.needs}/${nw.ratio.wants}/${nw.ratio.savings} rule: needs took ${share(nw.spent.needs)} of your income, wants ${share(nw.spent.wants)}, and you set aside ${share(nw.setAside)}${overW ? `. Wants went ${money(nw.spent.wants - nw.target.wants)} over their share` : overN ? `. Needs went ${money(nw.spent.needs - nw.target.needs)} over their share` : ''}.`,
     });
+  }
+  if (savingsGoals(state).length) {
+    const flow = savingsFlow(state, range);
+    if (flow.in || flow.out) {
+      items.push({
+        level: flow.net > 0 ? 'good' : flow.net < 0 ? 'warn' : 'info',
+        text: `Your savings ${flow.net >= 0 ? 'grew' : 'shrank'} by ${money(Math.abs(flow.net))} to ${money(savingsTotal(state))}${flow.out ? `: ${money(flow.in)} went in and ${money(flow.out)} was taken out` : ''}.`,
+      });
+    }
   }
   const checks = planChecks(state, today);
   if (checks.buffer?.months != null) {

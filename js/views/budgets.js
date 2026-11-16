@@ -1,8 +1,9 @@
-import { budgetLevel, budgetSummary, inRange, rangeMonths, safeToSpend, sortCategories, sumBy } from '../calc.js';
+import { budgetLevel, budgetSummary, inRange, rangeMonths, rangeSpan, safeToSpend, sortCategories, sumBy } from '../calc.js';
 import { formatMonthName, formatShortDate, monthOf, timeframe, timeframeText, todayISO } from '../dates.js';
 import { h, icon } from '../dom.js';
 import { centsToInput, parseAmount } from '../money.js';
 import { monthPlan, suggestBudgets } from '../forecast.js';
+import { categoryLeft, deleteCategoryChanges, moveMoneyDialog } from '../move.js';
 import { budgetRow, card, checkbox, confirmDialog, empty, field, meter, openDialog, segmented } from '../ui.js';
 
 const percent = new Intl.NumberFormat(undefined, { style: 'percent', maximumFractionDigits: 0 });
@@ -21,7 +22,16 @@ export function categoriesSection(ctx) {
   const range = timeframe(ctx.ui.timeframe.choice, today, ctx.ui.timeframe);
   const scale = rangeMonths(range, state, today);
   const scaled = scaleText(scale);
-  const summary = budgetSummary(state, range, scale);
+  const summary = budgetSummary(state, range, scale, rangeSpan(range, state, today));
+  const thisMonth = range.month === monthOf(today); // Moves apply to this month's budgets.
+  const fromIncome = summary.rows.some((r) => r.fromIncome);
+  const given = (row) => {
+    if (!row.fromIncome) return row.adjust ? `Usual amount, ${row.adjust > 0 ? 'plus' : 'less'} ${ctx.money(Math.abs(row.adjust))} moved ${row.adjust > 0 ? 'in' : 'out'}` : null;
+    const parts = [`${ctx.money(row.given)} given from income`];
+    if (row.adjust) parts.push(`${ctx.money(Math.abs(row.adjust))} moved ${row.adjust > 0 ? 'in' : 'out'}`);
+    if (row.usual !== null && row.usual !== row.budget) parts.push(`usually ${ctx.money(row.usual)}`);
+    return parts.join(' · ');
+  };
   const received = sumBy(inRange(state.transactions, range), 'income');
   const incomeCategories = sortCategories(state.categories.filter((c) => c.kind === 'income' && !c.archived));
   const archived = sortCategories(state.categories.filter((c) => c.archived));
@@ -29,25 +39,36 @@ export function categoriesSection(ctx) {
 
   return h('div', { class: 'stack' },
       h('div', { class: 'section-tools' },
-        h('p', { class: 'view-intro' }, 'A monthly amount for each kind of spending. Money you don’t spend in a category goes back to your spending money; it isn’t kept for the category next month.'),
+        h('p', { class: 'view-intro' }, 'Each category’s budget for a month is what you give it when you split your income. In a month where income hasn’t been given to categories, its usual monthly amount is used. Unspent money goes back to your spending money.'),
         h('div', { class: 'btn-row' },
-          h('button', { type: 'button', class: 'btn btn-primary', onclick: () => amountsDialog(ctx) }, icon('edit'), 'Set monthly amounts'),
+          h('button', { type: 'button', class: 'btn btn-primary', onclick: () => moveMoneyDialog(ctx) }, icon('swap'), 'Move money'),
+          h('button', { type: 'button', class: 'btn', onclick: () => amountsDialog(ctx) }, icon('edit'), 'Set monthly amounts'),
           h('button', { type: 'button', class: 'btn', onclick: () => categoryDialog(ctx) }, icon('plus'), 'New category'))),
       limitCard(ctx, monthOf(today)),
       summaryCard(ctx, summary, range, scaled),
       card({
         title: 'Spending categories',
-        sub: `${timeframeText(range)}${scaled ? ` · monthly budgets scaled to ${scaled}` : ''}. Select a category to set or change its monthly budget.`,
+        sub: `${timeframeText(range)}${scaled ? ` · monthly budgets scaled to ${scaled}` : ''}${fromIncome ? ' · budgets given from income' : ''}. Select a category to change its usual monthly amount.`,
         cls: 'card-list',
       },
-        h('div', { class: 'row-list' }, summary.rows.map((row) => h('button', { type: 'button', class: 'row-btn', onclick: edit(row.category) },
-          row.budget !== null
-            ? budgetRow(ctx, row)
-            : h('span', { class: 'budget-row' },
-              h('span', { class: 'budget-top' },
-                h('span', { class: 'budget-name' }, row.category.name, row.category.archived ? h('span', { class: 'badge' }, 'Archived') : null, needTag(row.category)),
-                h('span', { class: 'budget-left muted' }, `${ctx.money(row.spent)} spent`)),
-              h('span', { class: 'budget-sub' }, 'No budget')))))),
+        h('div', { class: 'row-list' }, summary.rows.map((row) => {
+          const over = row.budget !== null && row.spent > row.budget;
+          const left = row.budget !== null ? row.budget - row.spent : 0;
+          return h('div', { class: 'cat-row', dataset: { category: row.category.id } },
+            h('button', { type: 'button', class: 'row-btn', onclick: edit(row.category) },
+              row.budget !== null
+                ? [budgetRow(ctx, row), given(row) ? h('span', { class: 'budget-given' }, given(row)) : null]
+                : h('span', { class: 'budget-row' },
+                  h('span', { class: 'budget-top' },
+                    h('span', { class: 'budget-name' }, row.category.name, row.category.archived ? h('span', { class: 'badge' }, 'Archived') : null, needTag(row.category)),
+                    h('span', { class: 'budget-left muted' }, `${ctx.money(row.spent)} spent`)),
+                  h('span', { class: 'budget-sub' }, 'No budget'))),
+            thisMonth && !row.category.archived && (over || left > 0)
+              ? h('div', { class: 'cat-actions' },
+                over ? h('button', { type: 'button', class: 'btn btn-sm', onclick: () => moveMoneyDialog(ctx, { to: `cat:${row.category.id}`, amount: -left }) }, 'Cover it') : null,
+                left > 0 ? h('button', { type: 'button', class: 'btn btn-sm btn-ghost', onclick: () => moveMoneyDialog(ctx, { from: `cat:${row.category.id}` }) }, icon('swap', 'icon-sm'), 'Move') : null)
+              : null);
+        }))),
       card({ title: 'Income categories', sub: timeframeText(range), cls: 'card-list' },
         incomeCategories.length
           ? h('div', { class: 'row-list' }, incomeCategories.map((c) => h('button', { type: 'button', class: 'row-btn', onclick: edit(c) },
@@ -259,22 +280,98 @@ export function categoryDialog(ctx, category = null) {
   });
 }
 
+// Deleting a category: its budget is shared out and its transactions move to another category, so nothing is
+// lost. A category nothing uses is simply deleted.
 async function deleteCategory(ctx, category) {
   const state = ctx.store.get();
-  const used = state.transactions.filter((t) => t.categoryId === category.id).length
-    + state.recurring.filter((r) => r.categoryId === category.id).length;
-  if (used) {
-    const archive = await confirmDialog({
+  const month = monthOf(todayISO());
+  const expense = category.kind === 'expense';
+  const refs = (r) => r.categoryId === category.id || (r.cats && category.id in r.cats) || (r.planSplit?.cats && category.id in r.planSplit.cats);
+  const txCount = state.transactions.filter((t) => t.categoryId === category.id).length;
+  const ruleCount = state.recurring.filter((r) => r.categoryId === category.id).length;
+  const used = state.transactions.some(refs) || state.recurring.some(refs) || state.goals.some((g) => g.categoryId === category.id);
+  const left = expense ? Math.max(0, categoryLeft(state, month).get(category.id)?.left ?? 0) : 0;
+  const usual = expense && category.monthlyBudget > 0 ? category.monthlyBudget : 0;
+  const others = sortCategories(state.categories.filter((c) => c.kind === category.kind && c.id !== category.id && !c.archived));
+  const archive = () => {
+    ctx.store.save('categories', { ...category, archived: true, monthlyBudget: null });
+    ctx.toast(`${category.name} archived`);
+  };
+
+  if (!used && !left && !usual) {
+    if (await confirmDialog({ title: 'Delete category?', message: `Delete ${category.name}? This can't be undone.` })) {
+      ctx.store.remove('categories', category.id);
+      ctx.toast('Category deleted');
+    }
+    return;
+  }
+  if (used && !others.length) {
+    const ok = await confirmDialog({
       title: 'This category is in use',
-      message: `${category.name} is used by ${used} ${used === 1 ? 'entry' : 'entries'}, so it can't be deleted. Archive it instead to hide it from new transactions.`,
+      message: `${category.name} is the only ${expense ? 'spending' : 'income'} category, so its transactions have nowhere to move to. Archive it instead to hide it from new transactions.`,
       confirm: 'Archive it',
       danger: false,
     });
-    if (archive) ctx.store.save('categories', { ...category, archived: true, monthlyBudget: null });
+    if (ok) archive();
     return;
   }
-  if (await confirmDialog({ title: 'Delete category?', message: `Delete ${category.name}? This can't be undone.` })) {
-    ctx.store.remove('categories', category.id);
-    ctx.toast('Category deleted');
-  }
+
+  const currency = ctx.currency();
+  const share = left > 0 ? left : usual; // What's being shared out: this month's unspent budget, or else the usual amount.
+  const inputs = new Map(others.map((c) => [c.id, h('input', { name: `share-${c.id}`, class: 'input amounts-input', inputmode: 'decimal', autocomplete: 'off', placeholder: centsToInput(0, currency), 'aria-label': `Amount for ${c.name}` })]));
+  const rest = h('b', {});
+  const read = () => {
+    const shares = new Map();
+    let sum = 0;
+    for (const [id, input] of inputs) {
+      const text = input.value.trim();
+      if (!text) continue;
+      const cents = parseAmount(text);
+      if (cents === null) return null;
+      if (cents > 0) shares.set(id, cents);
+      sum += cents;
+    }
+    return { shares, sum };
+  };
+  const update = () => {
+    const r = read();
+    rest.textContent = r ? ctx.money(share - r.sum) : '–';
+    rest.className = r && r.sum > share ? 'bad' : '';
+  };
+  for (const input of inputs.values()) input.addEventListener('input', update);
+  update();
+  const target = h('select', { name: 'target', class: 'input' }, others.map((c) => h('option', { value: c.id }, c.name)));
+  const counts = [txCount ? `${txCount} ${txCount === 1 ? 'transaction' : 'transactions'}` : null, ruleCount ? `${ruleCount} recurring or planned ${ruleCount === 1 ? 'payment' : 'payments'}` : null].filter(Boolean).join(' and ');
+
+  const dialog = openDialog({
+    title: `Delete ${category.name}?`,
+    submitLabel: 'Delete and move',
+    danger: true,
+    content: h('div', { class: 'form-grid' },
+      h('p', { class: 'field-hint' }, 'Deleting it removes the category for good. Choose where its things go first. To hide it but keep its history under its own name, archive it instead.'),
+      used
+        ? field('Move its transactions to', target, `${counts || 'Its links'} will be under that category from now on, with everything income gave it and any set-asides tied to it.`)
+        : null,
+      expense && share > 0 && others.length
+        ? h('div', { class: 'field' },
+          h('span', { class: 'field-label' }, left > 0 ? `Share out the ${ctx.money(left)} left of its budget this month` : `Share out its usual ${ctx.money(usual)} a month`),
+          h('div', { class: 'amounts' }, others.map((c) => h('label', { class: 'amounts-row' }, h('span', { class: 'amounts-name' }, c.name), inputs.get(c.id)))),
+          h('p', { class: 'split-keep' }, h('span', {}, left > 0 ? 'Back to unbudgeted' : 'Not passed on'), rest))
+        : null,
+      expense && left > 0 && usual > 0 ? checkbox('usual', `Also add its usual ${ctx.money(usual)} a month to those categories, in the same shares`, true) : null),
+    extraActions: [h('button', { type: 'button', class: 'btn btn-ghost', onclick: () => { dialog.close(); archive(); } }, 'Archive instead')],
+    onSubmit(data) {
+      const r = read();
+      if (!r) throw new Error('Enter each amount as a number, like 20 or 20.00, or leave it empty.');
+      if (r.sum > share) throw new Error(`That’s ${ctx.money(r.sum - share)} more than there is to share out.`);
+      let shares = new Map();
+      let usualShares = new Map();
+      if (left > 0) {
+        shares = r.shares;
+        if (usual > 0 && data.get('usual') === 'on' && r.sum > 0) for (const [id, cents] of r.shares) usualShares.set(id, Math.floor((usual * cents) / r.sum));
+      } else usualShares = r.shares;
+      ctx.store.batch(deleteCategoryChanges(ctx.store.get(), category, { shares, usual: usualShares, target: used ? data.get('target') : null, month }));
+      ctx.toast(`${category.name} deleted`);
+    },
+  });
 }

@@ -1,11 +1,13 @@
 // Splitting income: where one income entry goes ("Where should this go?"), the default split for each kind
 // of income (with the "Save for my goals" and 50/30/20 presets), and the list of income still waiting to be split.
 
-import { categoryName, spendPerDay, splitOf, splitTotal } from './calc.js';
+import { categoryName, catsOf, catsTotal, spendPerDay, splitOf, splitTotal } from './calc.js';
 import { formatDate, formatMonthName, formatShortDate, monthOf, todayISO } from './dates.js';
 import { h } from './dom.js';
 import { centsToInput, parseAmount } from './money.js';
-import { dateAfter, defaultSplit, incomeMonths, planSplit, presetSplit, ratioOf, scheduleDue, sortedGoals, toSplit, validSchedule } from './pots.js';
+import { budgetOrder, dateAfter, defaultSplit, incomeMonths, planSplit, plannedSplit, presetSplit, ratioOf, scheduleDue, sortedGoals, toSplit, validSchedule } from './pots.js';
+import { nextOpen } from './recurring.js';
+import { isSavings } from './savings.js';
 import { card, field, notice, openDialog, segmented } from './ui.js';
 
 const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
@@ -48,32 +50,45 @@ export function markSplitUsed(ctx) {
 
 const PRESETS = [['default', 'My default'], ['goals', 'Save for my goals'], ['ratio', '50/30/20']];
 
-// Asks where one income entry should go: an amount for each set-aside, the rest kept for spending.
-export function splitDialog(ctx, income) {
+// Asks where one income entry should go: an amount for each savings pot, goal and wishlist item (set aside),
+// an amount for each spending category (its budget for the month), and the rest left unbudgeted.
+// With `rule` (a recurring or planned income), it plans that income's split ahead instead: the amounts are
+// saved on the rule and filled in when the income arrives.
+export function splitDialog(ctx, income, { rule = null } = {}) {
   markSplitUsed(ctx);
   const state = ctx.store.get();
-  const tx = state.transactions.find((t) => t.id === income.id) ?? income;
-  if (tx.kind !== 'income' || !state.goals.length) return;
-  const currency = ctx.currency();
   const today = todayISO();
+  const planning = !!rule;
+  const tx = planning
+    ? { id: `(plan ${rule.id})`, kind: 'income', amount: rule.amount, categoryId: rule.categoryId, date: nextOpen(state, rule, today)?.date ?? today, note: rule.name, recurringId: rule.id }
+    : state.transactions.find((t) => t.id === income.id) ?? income;
+  if (tx.kind !== 'income') return;
+  const currency = ctx.currency();
   const category = categoryName(state, tx.categoryId);
-  const answered = !!tx.split;
-  const current = splitOf(tx) ?? {};
-  const before = splitTotal(state, tx);
+  const answered = planning ? !!rule.planSplit : !!tx.split;
+  const current = planning ? rule.planSplit?.goals ?? {} : splitOf(tx) ?? {};
+  const currentCats = planning ? rule.planSplit?.cats ?? {} : catsOf(tx) ?? {};
+  const before = planning ? 0 : splitTotal(state, tx);
   const d = spendPerDay(state, today);
-  const counted = tx.date <= today; // Already part of today's balance.
-  const hasSchedules = state.goals.some((g) => validSchedule(g));
+  const counted = !planning && tx.date <= today; // Already part of today's balance.
+  const goals = sortedGoals(state);
+  const hasSchedules = goals.some((g) => validSchedule(g));
+  const hasPlanned = !planning && plannedSplit(state, tx) !== null;
 
-  const inputs = new Map();
+  const inputs = new Map(); // set-aside id -> input
+  const catInputs = new Map(); // category id -> input
   const subs = new Map();
+  const asideValue = h('b', {});
   const keepValue = h('b', {});
+  const catsValue = h('b', {});
+  const freeValue = h('b', {});
   const leaves = h('p', { class: 'field-hint split-leaves' });
   const warning = h('div', {});
   const lead = h('p', { class: 'field-hint' });
 
-  const read = () => {
+  const sum = (map) => {
     let total = 0;
-    for (const input of inputs.values()) {
+    for (const input of map.values()) {
       const text = input.value.trim();
       if (!text) continue;
       const cents = parseAmount(text);
@@ -83,121 +98,193 @@ export function splitDialog(ctx, income) {
     return total;
   };
   const update = () => {
-    const total = read();
+    const aside = sum(inputs);
+    const cats = sum(catInputs);
     warning.replaceChildren();
-    if (total === null) {
-      keepValue.textContent = '–';
+    if (aside === null || cats === null) {
+      for (const el of [asideValue, keepValue, catsValue, freeValue]) el.textContent = '–';
       leaves.textContent = 'Enter amounts as numbers, like 100 or 100.00.';
       return;
     }
-    const keep = tx.amount - total;
+    const keep = tx.amount - aside;
+    const free = keep - cats;
+    asideValue.textContent = ctx.money(aside);
     keepValue.textContent = ctx.money(keep);
     keepValue.className = keep < 0 ? 'bad' : '';
+    catsValue.textContent = ctx.money(cats);
+    freeValue.textContent = ctx.money(free);
+    freeValue.className = free < 0 ? 'bad' : '';
     if (keep < 0) {
-      leaves.textContent = `That’s ${ctx.money(-keep)} more than this income.`;
+      leaves.textContent = `That sets aside ${ctx.money(-keep)} more than this income.`;
+      return;
+    }
+    if (free < 0) {
+      leaves.textContent = `The categories add up to ${ctx.money(-free)} more than what’s kept for spending.`;
       return;
     }
     if (!counted) {
-      leaves.textContent = '';
+      leaves.textContent = planning ? 'Filled in for you when this income arrives. You can still change it then.' : '';
       return;
     }
-    const free = d.free - (total - before); // Spending money after bills still to come, once this is set aside.
-    const perDay = Math.floor(Math.max(0, free + d.spentToday) / d.daysLeft);
+    const left = d.free - (aside - before); // Spending money after everything still to come, once this is set aside.
+    const perDay = Math.floor(Math.max(0, left + d.spentToday) / d.daysLeft);
     leaves.textContent = `That leaves about ${ctx.money(perDay)} a day to spend for the ${d.daysLeft} ${d.daysLeft === 1 ? 'day' : 'days'} left in ${formatMonthName(monthOf(today))}.`;
-    if (free < 0) {
+    if (left < 0) {
       warning.append(notice('warn', d.reserved > 0
-        ? `After this, your spending money won’t cover the ${ctx.money(d.reserved)} of bills still to come this month.`
-        : `This sets aside ${ctx.money(-free)} more than the spending money you have.`));
+        ? `After this, your spending money won’t cover the ${ctx.money(d.reserved)} still to come out this month.`
+        : `This sets aside ${ctx.money(-left)} more than the spending money you have.`));
     }
   };
 
-  // Fills the amounts in from a preset (or the saved split) and explains where they came from.
+  // Fills the amounts in from a preset (or the saved or planned split) and explains where they came from.
   const apply = (preset) => {
-    const plan = planSplit(state, tx, presetSplit(state, preset, tx.categoryId));
+    const base = preset === 'saved' || preset === 'planned' ? 'default' : preset;
+    const plan = preset === 'planned' ? plannedSplit(state, tx) : planSplit(state, tx, presetSplit(state, base, tx.categoryId));
     for (const row of plan.rows) {
       const value = preset === 'saved' ? current[row.goal.id] ?? 0 : row.give;
       inputs.get(row.goal.id).value = value > 0 ? centsToInput(value, currency) : '';
       const notes = [
         row.snoozed ? 'Snoozed this month' : null,
-        row.rule ? `${preset === 'default' ? 'Default' : 'Preset'}: ${row.rule.type === 'schedule' ? scheduleText(ctx, state, row.goal, monthOf(tx.date)) ?? 'on its schedule' : ruleText(ctx, row.rule)}` : null,
+        row.rule ? `${base === 'default' ? 'Default' : 'Preset'}: ${row.rule.type === 'schedule' ? scheduleText(ctx, state, row.goal, monthOf(tx.date)) ?? 'on its schedule' : ruleText(ctx, row.rule)}` : null,
         row.rest ? `plus ${ctx.money(row.rest)} of the savings part left over` : null,
         row.rule && row.rule.type !== 'percent' && row.already > 0 ? `${ctx.money(row.already)} already this month` : null,
         row.toTarget === null ? null : row.toTarget === 0 ? 'target reached' : `${ctx.money(row.toTarget)} to its target`,
       ].filter(Boolean);
-      subs.get(row.goal.id).textContent = notes.join(' · ') || (preset === 'goals' ? 'No saving schedule' : 'Not in this split');
+      subs.get(row.goal.id).textContent = notes.join(' · ') || (preset === 'planned' ? '' : base === 'goals' ? 'No saving schedule' : 'Not in this split');
+    }
+    for (const row of plan.cats) {
+      const value = preset === 'saved' ? currentCats[row.category.id] ?? 0 : row.give;
+      catInputs.get(row.category.id).value = value > 0 ? centsToInput(value, currency) : '';
+      const notes = [
+        row.usual ? `Usually ${ctx.money(row.usual)} a month` : 'No usual amount',
+        row.already > 0 ? `${ctx.money(row.already)} already this month` : null,
+      ].filter(Boolean);
+      subs.get(row.category.id).textContent = notes.join(' · ');
     }
     let text;
-    if (preset === 'saved') text = 'This is how it’s split now. Change any amount.';
-    else if (preset === 'goals') text = hasSchedules ? 'Each goal gets what’s due on its saving schedule this month.' : 'None of your set-asides has a saving schedule yet. Give them one on the Plan page (edit a set-aside).';
+    if (preset === 'saved') text = planning ? 'This is the split you planned. Change any amount.' : 'This is how it’s split now. Change any amount.';
+    else if (preset === 'planned') text = `Filled in from the split you planned for ${tx.note || category}.`;
+    else if (preset === 'goals') text = hasSchedules ? 'Each goal gets what’s due on its saving schedule this month.' : 'None of your set-asides has a saving schedule yet. Give them one on the Budget page (edit a set-aside).';
     else if (preset === 'ratio') text = `The ${ratioText(plan.ratio)} rule: ${Number(plan.ratio.savings.toFixed(1))}% of this (${ctx.money(Math.round((tx.amount * plan.ratio.savings) / 100))}) is for savings, goals on their schedules first.`;
     else if (plan.source === 'keep') text = `Your default for ${category} is to keep it all. Type an amount to set some aside anyway.`;
     else if (plan.source === 'ratio') text = `Filled in from your default for ${category}: the ${ratioText(plan.ratio)} rule.`;
     else if (plan.rows.some((r) => r.rule)) text = `Filled in from your default split for ${category}. Change any amount.`;
-    else text = 'You haven’t set a default split yet, so nothing is filled in. Type what you want to set aside, or pick a preset.';
-    if (preset !== 'saved' && plan.short > 0) text += ` It asks for ${ctx.money(plan.short)} more than this income covers, so set-asides lower in your order get less.`;
+    else text = 'You haven’t set a default split yet, so no set-asides are filled in. Type what you want, or pick a preset.';
+    if (preset !== 'saved' && plan.short > 0) text += ` It asks for ${ctx.money(plan.short)} more than this income covers, so the ones lower down get less.`;
     lead.replaceChildren(text, ' ',
-      h('button', { type: 'button', class: 'link-btn', onclick: () => { dialog.close(); defaultSplitDialog(ctx, tx.categoryId, { then: () => splitDialog(ctx, tx) }); } }, 'Change the default'));
+      planning ? null : h('button', { type: 'button', class: 'link-btn', onclick: () => { dialog.close(); defaultSplitDialog(ctx, tx.categoryId, { then: () => splitDialog(ctx, tx) }); } }, 'Change the default'));
     update();
   };
 
-  const rows = sortedGoals(state).map((goal) => {
+  const row = (map, name, id, label) => {
     const input = h('input', {
-      name: `amt-${goal.id}`,
+      name,
       class: 'input split-input',
       inputmode: 'decimal',
       autocomplete: 'off',
       placeholder: centsToInput(0, currency),
-      'aria-label': `Set aside for ${goal.name}`,
+      'aria-label': label,
       oninput: update,
     });
-    inputs.set(goal.id, input);
+    map.set(id, input);
     const sub = h('span', { class: 'split-sub' });
-    subs.set(goal.id, sub);
-    return h('label', { class: 'split-row' }, h('span', { class: 'split-name' }, goal.name, sub), input);
-  });
+    subs.set(id, sub);
+    return input;
+  };
+  const goalRow = (goal) => {
+    const input = row(inputs, `amt-${goal.id}`, goal.id, `Set aside for ${goal.name}`);
+    return h('label', { class: 'split-row' }, h('span', { class: 'split-name' }, goal.name, subs.get(goal.id)), input);
+  };
+  const catRow = (c) => {
+    const input = row(catInputs, `cat-${c.id}`, c.id, `Budget for ${c.name}`);
+    return h('label', { class: 'split-row' }, h('span', { class: 'split-name' }, c.name, subs.get(c.id)), input);
+  };
+  const group = (title, hint, rows, cls = '') => (rows.length
+    ? h('section', { class: `split-group ${cls}`.trim() }, h('h3', { class: 'split-title' }, title, hint ? h('span', { class: 'split-hint' }, hint) : null), h('div', { class: 'split-rows' }, rows))
+    : null);
+  const savings = goals.filter(isSavings);
+  const others = goals.filter((g) => !isSavings(g));
+  const categories = budgetOrder(state);
+  const main = categories.filter((c) => c.monthlyBudget > 0 || currentCats[c.id] > 0);
+  const more = categories.filter((c) => !main.includes(c));
+  const moreRows = more.map(catRow);
 
-  const save = (split) => {
-    const latest = ctx.store.get().transactions.find((t) => t.id === tx.id) ?? tx;
-    ctx.store.save('transactions', { ...latest, split });
+  const save = (split, cats) => {
+    if (planning) {
+      const latest = ctx.store.get().recurring.find((r) => r.id === rule.id) ?? rule;
+      ctx.store.save('recurring', { ...latest, planSplit: split === null ? null : { goals: split === 'kept' ? {} : split, cats: cats ?? {} } });
+      return;
+    }
+    const latest = { ...(ctx.store.get().transactions.find((t) => t.id === tx.id) ?? tx), split };
+    if (cats && Object.keys(cats).length) latest.cats = cats;
+    else delete latest.cats;
+    ctx.store.save('transactions', latest);
   };
 
-  const dialog = openDialog({
-    title: answered ? 'Change split' : 'Where should this go?',
-    submitLabel: 'Set aside',
-    content: h('div', { class: 'form-grid split' },
-      h('p', { class: 'split-lead' }, h('b', {}, ctx.money(tx.amount)), ` · ${tx.note || category} · ${formatShortDate(tx.date)}`),
-      h('div', { class: 'preset-row' },
-        h('span', { class: 'field-label' }, 'Fill in from'),
-        h('div', { class: 'btn-row preset-btns' }, [...(answered ? [['saved', 'As saved']] : []), ...PRESETS].map(([id, label]) =>
-          h('button', { type: 'button', class: 'btn btn-sm', dataset: { preset: id }, onclick: () => apply(id) }, label)))),
-      lead,
-      h('div', { class: 'split-rows' }, rows),
-      h('p', { class: 'split-keep' }, h('span', {}, 'Keep for spending'), keepValue),
-      leaves,
-      warning),
-    extraActions: [h('button', {
+  const extraActions = planning
+    ? (rule.planSplit ? [h('button', {
+      type: 'button',
+      class: 'btn btn-ghost',
+      onclick: () => {
+        save(null);
+        dialog.close();
+        ctx.toast('Plan removed: your default split is used when it arrives');
+      },
+    }, 'Remove the plan')] : [])
+    : [h('button', {
       type: 'button',
       class: 'btn btn-ghost',
       onclick: () => {
         save('kept');
         dialog.close();
-        ctx.toast(`All ${ctx.money(tx.amount)} kept for spending`);
+        ctx.toast(`All ${ctx.money(tx.amount)} kept, unbudgeted`);
       },
-    }, 'Keep it all')],
+    }, 'Keep it all')];
+
+  const dialog = openDialog({
+    title: planning ? `Plan the split: ${rule.name}` : answered ? 'Change split' : 'Where should this go?',
+    submitLabel: planning ? 'Save the plan' : 'Split it',
+    content: h('div', { class: 'form-grid split' },
+      h('p', { class: 'split-lead' }, h('b', {}, ctx.money(tx.amount)), ` · ${tx.note || category} · ${planning ? 'each time it comes in' : formatShortDate(tx.date)}`),
+      h('div', { class: 'preset-row' },
+        h('span', { class: 'field-label' }, 'Fill in from'),
+        h('div', { class: 'btn-row preset-btns' }, [...(answered ? [['saved', planning ? 'My plan' : 'As saved']] : []), ...(hasPlanned ? [['planned', 'My plan for it']] : []), ...PRESETS].map(([id, label]) =>
+          h('button', { type: 'button', class: 'btn btn-sm', dataset: { preset: id }, onclick: () => apply(id) }, label)))),
+      lead,
+      group('Savings', 'Set aside, not for spending', savings.map(goalRow), 'split-savings'),
+      group('Goals and wishlist', 'Set aside until you use it', others.map(goalRow), 'split-goals'),
+      group('Spending categories', 'Its budget for the month. Stays in your spending money.', main.map(catRow), 'split-cats'),
+      moreRows.length
+        ? h('details', { class: 'table-toggle split-more' }, h('summary', {}, main.length ? `More categories (${moreRows.length})` : `Spending categories (${moreRows.length})`), h('div', { class: 'split-rows' }, moreRows))
+        : null,
+      h('div', { class: 'split-totals' },
+        h('p', { class: 'split-line' }, h('span', {}, 'Set aside'), asideValue),
+        h('p', { class: 'split-keep' }, h('span', {}, 'Kept for spending'), keepValue),
+        h('p', { class: 'split-line split-sub-line' }, h('span', {}, 'Budgeted to categories'), catsValue),
+        h('p', { class: 'split-line split-sub-line split-unbudgeted' }, h('span', {}, 'Left unbudgeted'), freeValue)),
+      leaves,
+      warning),
+    extraActions,
     onSubmit() {
-      const total = read();
-      if (total === null) throw new Error('Enter amounts as numbers, like 100 or 100.00.');
-      if (total > tx.amount) throw new Error(`That’s ${ctx.money(total - tx.amount)} more than this income. Lower an amount.`);
-      const split = {};
-      for (const [id, input] of inputs) {
-        const cents = parseAmount(input.value.trim()) ?? 0;
-        if (cents > 0) split[id] = cents;
-      }
-      save(total > 0 ? split : 'kept');
-      ctx.toast(total > 0 ? `${ctx.money(total)} set aside · ${ctx.money(tx.amount - total)} kept for spending` : `All ${ctx.money(tx.amount)} kept for spending`);
+      const aside = sum(inputs);
+      const cats = sum(catInputs);
+      if (aside === null || cats === null) throw new Error('Enter amounts as numbers, like 100 or 100.00.');
+      if (aside > tx.amount) throw new Error(`That sets aside ${ctx.money(aside - tx.amount)} more than this income. Lower an amount.`);
+      if (cats > tx.amount - aside) throw new Error(`The categories add up to ${ctx.money(cats - (tx.amount - aside))} more than what’s kept for spending. Lower an amount.`);
+      const read = (map) => {
+        const out = {};
+        for (const [id, input] of map) {
+          const cents = parseAmount(input.value.trim()) ?? 0;
+          if (cents > 0) out[id] = cents;
+        }
+        return out;
+      };
+      save(aside > 0 ? read(inputs) : 'kept', read(catInputs));
+      const parts = [aside ? `${ctx.money(aside)} set aside` : null, cats ? `${ctx.money(cats)} budgeted to categories` : null, `${ctx.money(tx.amount - aside - cats)} left unbudgeted`].filter(Boolean);
+      ctx.toast(planning ? 'Split planned' : parts.join(' · '));
     },
   });
-  apply(answered ? 'saved' : 'default');
+  apply(answered ? 'saved' : hasPlanned ? 'planned' : 'default');
 }
 
 // Edits the 50/30/20 ratio: the shares for needs, wants and savings, and where the savings part goes once

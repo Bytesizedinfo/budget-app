@@ -9,7 +9,7 @@ import { fundGoal, fundOf, savedByNotBuying, timeline, wishInfo } from '../forec
 import { centsToInput, parseAmount } from '../money.js';
 import { isClosed, isSnoozed, isWish, sortedGoals } from '../pots.js';
 import { nextOpen, occurrences, occurrencesBetween, repeatOf, repeatWords, settledCount } from '../recurring.js';
-import { markSplitUsed, scheduleFields, scheduleText } from '../split.js';
+import { markSplitUsed, scheduleFields, scheduleText, splitDialog } from '../split.js';
 import { txRow } from '../tx.js';
 import { card, checkbox, confirmDialog, empty, field, initialBadge, meter, notice, openDialog, segmented, signedAmount, timeframePicker, viewHead } from '../ui.js';
 import { contributionDialog, snoozeControl } from './plan.js';
@@ -95,18 +95,18 @@ function rulesCard(ctx, state, rules, today, planned) {
   const live = rows.filter((r) => r.next || r.due.length);
   const out = live.filter((r) => r.rule.kind === 'expense').reduce((sum, r) => sum + perMonth(r.rule), 0);
   const into = live.filter((r) => r.rule.kind === 'income').reduce((sum, r) => sum + perMonth(r.rule), 0);
-  const add = h('button', { type: 'button', class: 'btn btn-sm', onclick: () => ruleDialog(ctx, null, planned) }, icon('plus', 'icon-sm'), planned ? 'New planned payment' : 'New recurring payment');
+  const add = h('button', { type: 'button', class: 'btn btn-sm', onclick: () => ruleDialog(ctx, null, planned) }, icon('plus', 'icon-sm'), planned ? 'New planned payment/income' : 'New recurring payment');
   return card({
-    title: planned ? 'Planned payments' : 'Recurring payments',
+    title: planned ? 'Planned payments/income' : 'Recurring payments',
     sub: planned
-      ? 'Things you plan to pay for: once on a date, or repeating for a while'
+      ? 'Payments you plan to make and income you expect: once on a date, or repeating for a while'
       : rows.length ? `About ${ctx.money(out)} going out and ${ctx.money(into)} coming in each month` : 'Bills, subscriptions and regular income',
     action: add,
     cls: `card-list rules-card ${planned ? 'planned-card' : 'recurring-card'}`,
   },
     rows.length
       ? h('div', { class: 'tx-list' }, rows.map((r) => ruleRow(ctx, state, r, today)))
-      : empty(planned ? 'Nothing planned. Add a payment you know is coming, like a birthday dinner or a renewal.' : 'Add rent, subscriptions, salary and other regular amounts once, and they’ll be waiting for you each time.'));
+      : empty(planned ? 'Nothing planned. Add a payment you know is coming, like a birthday dinner, or income you expect, like next month’s pay.' : 'Add rent, subscriptions, salary and other regular amounts once, and they’ll be waiting for you each time.'));
 }
 
 function ruleRow(ctx, state, { rule, due, next }, today) {
@@ -120,6 +120,7 @@ function ruleRow(ctx, state, { rule, due, next }, today) {
   if (rule.endAfter > 0) parts.push(`${settledCount(state, rule).paid} of ${rule.endAfter} paid`);
   const coming = due[0] ?? next;
   if (coming && coming.amount !== rule.amount) parts.push(`${ctx.money(coming.amount)} this time`);
+  if (rule.kind === 'income' && rule.planSplit) parts.push('split planned');
   if (fund) parts.push(`${ctx.money(Math.max(0, potBalance(state, fund)))} of ${ctx.money(coming?.amount ?? rule.amount)} set aside`);
   return h('button', { type: 'button', class: 'tx-row', dataset: { rule: rule.id }, onclick: () => ruleDialog(ctx, rule, !!rule.planned) },
     initialBadge(rule.name),
@@ -229,6 +230,9 @@ export function ruleDialog(ctx, rule = null, planned = false) {
   sync();
 
   const extraActions = [];
+  if (rule?.kind === 'income') {
+    extraActions.push(h('button', { type: 'button', class: 'btn btn-ghost', onclick: () => { dialog.close(); splitDialog(ctx, null, { rule }); } }, rule.planSplit ? 'Change its split' : 'Plan its split'));
+  }
   if (rule) {
     extraActions.push(h('button', { type: 'button', class: 'btn btn-ghost btn-danger', onclick: () => { dialog.close(); deleteRule(ctx, rule); } }, 'Delete'));
     const next = occurrences(state, rule, today).find((o) => o.status === 'open') ?? nextOpen(state, rule, today);
@@ -238,7 +242,7 @@ export function ruleDialog(ctx, rule = null, planned = false) {
   }
 
   const dialog = openDialog({
-    title: `${rule ? 'Edit' : 'New'} ${planned ? 'planned' : 'recurring'} payment`,
+    title: `${rule ? 'Edit' : 'New'} ${planned ? 'planned payment/income' : 'recurring payment'}`,
     content: h('div', { class: 'form-grid' },
       segmented('kind', [['expense', 'Expense'], ['income', 'Income']], kind, (value) => {
         kind = value;
@@ -328,7 +332,8 @@ export function ruleDialog(ctx, rule = null, planned = false) {
       if (fundValue && !held) ctx.store.save('goals', { name, billId: saved.id, target: null, deadline: null, contributions: [] });
       else if (fundValue && held.name !== name) ctx.store.save('goals', { ...held, name });
       else if (!fundValue && held) ctx.store.remove('goals', held.id);
-      ctx.toast(rule ? 'Payment saved' : `${name} added`);
+      if (!rule && kind === 'income') ctx.toast(`${name} added`, { label: 'Plan its split', run: () => splitDialog(ctx, null, { rule: saved }) });
+      else ctx.toast(rule ? 'Payment saved' : `${name} added`);
     },
   });
 }

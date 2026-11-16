@@ -2,7 +2,7 @@
 
 A personal monthly budget that runs on GitHub Pages and keeps its data in a private GitHub repository.
 
-Five places on a phone: **Home**, **Activity**, a **+** to add, **Budget** and **Upcoming**. Insights, Reports and Settings are in the menu at the top.
+Five places on a phone: **Home**, **Activity**, a **+** to add, **Budget** and **Upcoming**. Savings, Insights, Reports and Settings are in the menu at the top.
 
 **Home**
 - **To confirm**: payments and income whose day has come. Nothing is recorded by itself: mark each one **Paid** (with the real amount), **Skip** it, or **Postpone** it.
@@ -16,17 +16,18 @@ Five places on a phone: **Home**, **Activity**, a **+** to add, **Budget** and *
 
 **Budget**
 - **Month plan** for this month or next: expected income (what came in last month, or your own figure) minus recurring payments, planned payments, set-asides and category budgets = what's left unbudgeted, and per day. Over-planning is flagged. Every line opens its breakdown.
-- **Categories**: a monthly amount for each kind of spending, set together with what's left updating as you type, or **suggested from your average spending**. Mark each as a need or a want. Unspent money goes back to your spending money.
+- **Categories**: each category's budget for a month is what you give it when you split your income; in a month where income hasn't been given to categories, its usual monthly amount is used (set them together, or have them **suggested from your average spending**). **Move money** between categories, set-asides and unbudgeted money, and **cover** an overspent category. Mark each as a need or a want. **Deleting a category** lets you share out its budget and move its transactions to another one. Unspent money goes back to your spending money.
+- **Savings**: the set-asides you mark as savings, with the total, what went in and out for the time frame, your savings rate, a growth chart, and everything taken out. The app asks before money leaves savings. Also a page of its own in the menu and a card on Home.
 - **Set-asides**: savings goals and pots, the default split for each kind of income (with the **Save for my goals** and **50/30/20** presets), saving schedules (an amount every N days, weeks or months; reach a target by a date or within a length of time), money set aside automatically or from income, moving money between set-asides, **snoozing** a set-aside for the month (nothing goes into it until next month, or until you resume it), a safety buffer, and checks on whether each goal is on track.
 
 **Upcoming**
-- **Recurring payments** and **planned payments** (expense or income) that repeat once, daily, weekly, every 2 or 4 weeks, twice a month, monthly, every 3 or 6 months, yearly, or every N days/weeks/months/years; end never, on a date, or after N times ("3 of 12 paid").
+- **Recurring payments** and **planned payments/income** that repeat once, daily, weekly, every 2 or 4 weeks, twice a month, monthly, every 3 or 6 months, yearly, or every N days/weeks/months/years; end never, on a date, or after N times ("3 of 12 paid").
 - **Set money aside for any payment**: all of it a number of days before, an amount every N days/weeks/months, or spread monthly until it's due. The payment is paid from that money.
 - The **next 60 days** with the spending money left after each item and the lowest point. Tap a payment there to **change just that one** (its amount this time, or its date) without touching the rest.
 - A **wishlist**: price, priority, link and note; saved up from income or automatically on a schedule; "ready around…", "buying it now would leave you…", a tick to count it on Home, Bought (paid from what was set aside), and a "saved by not buying" total.
 
 **Also**
-- **Split every income**: when income comes in you're asked how much to set aside and how much to keep, filled in from your default split.
+- **Split every income**: when income comes in, in any form, you're asked how much goes to **savings**, to **goals and wishlist items**, and to each **spending category**, with the rest left unbudgeted. It's filled in from your default split and each category's usual amount. A recurring or planned income can have its **split planned ahead**; it's filled in when the income arrives, and the Budget's month plan follows it.
 - The **time frame** (today, this week, the last 7 or 30 days, this month, last month, this year, all time, or your own dates) on every page that shows money. Budgets scale each monthly amount to the range.
 - Pay for an expense **from a set-aside**; a set-aside meant for a category is pre-selected for it.
 - **Insights**: plain-word findings and charts (money in and out, spending pace, where income went, categories, weekdays, income sources, balance over time). **Reports**: 12 months of income and spending.

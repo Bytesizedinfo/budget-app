@@ -8,6 +8,8 @@ import { formatDate, formatMonth, formatMonthName, formatShortDate, isValidDate,
 import { h, icon } from '../dom.js';
 import { centsToInput, parseAmount } from '../money.js';
 import { needsWants } from '../insights.js';
+import { confirmDip, moveMoneyDialog } from '../move.js';
+import { isSavings } from '../savings.js';
 import { defaultSplit, incomeMonths, isSnoozed, isWish, planChecks, plannedFor, ratioOf, setAsideIn, sortedGoals, sourcesOf, tryPay, validSchedule } from '../pots.js';
 import { defaultSplitDialog, markSplitUsed, ratioDialog, ratioText, ruleText, scheduleFields, scheduleText, splitWords, toSplitCard } from '../split.js';
 import { newId } from '../store.js';
@@ -45,7 +47,7 @@ export function setAsidesSection(ctx) {
 // How much is set aside in total, and where it sits: goals, wishlist items and money held for payments.
 function totalCard(ctx, state, today) {
   const b = balance(state, today);
-  const label = (goal) => (goal.billId ? `${goal.name} (payment)` : isWish(goal) ? `${goal.name} (wishlist)` : goal.name);
+  const label = (goal) => (goal.billId ? `${goal.name} (payment)` : isWish(goal) ? `${goal.name} (wishlist)` : isSavings(goal) ? `${goal.name} (savings)` : goal.name);
   const rows = state.goals.map((goal) => ({ label: label(goal), value: Math.max(0, potBalance(state, goal, today)) })).filter((r) => r.value > 0).sort((a, b2) => b2.value - a.value);
   return card({ title: 'Set aside', sub: 'Where your set-aside money sits, as of today', cls: 'plan-total' },
     h('p', { class: 'plan-total-value' }, ctx.money(b.savings)),
@@ -116,8 +118,9 @@ function goalCard(ctx, state, goal, index, goals, today, range, actual) {
       h('button', { type: 'button', class: 'icon-btn', 'aria-label': `Edit ${goal.name}`, onclick: () => goalDialog(ctx, goal) }, icon('edit'))),
     cls: 'goal-card',
   },
-    goal.buffer || goal.categoryId
+    goal.buffer || goal.categoryId || isSavings(goal)
       ? h('p', { class: 'goal-tags' },
+        isSavings(goal) ? h('span', { class: 'badge badge-savings' }, 'Savings') : null,
         goal.buffer ? h('span', { class: 'badge' }, 'Safety buffer') : null,
         goal.categoryId && state.categories.some((c) => c.id === goal.categoryId) ? h('span', { class: 'badge' }, `For ${categoryName(state, goal.categoryId)}`) : null)
       : null,
@@ -133,7 +136,7 @@ function goalCard(ctx, state, goal, index, goals, today, range, actual) {
     h('div', { class: 'btn-row' },
       h('button', { type: 'button', class: 'btn btn-primary btn-sm', onclick: () => contributionDialog(ctx, goal, 1) }, icon('plus'), 'Add money'),
       p.saved > 0 ? h('button', { type: 'button', class: 'btn btn-sm', onclick: () => contributionDialog(ctx, goal, -1) }, 'Withdraw') : null,
-      p.saved > 0 ? h('button', { type: 'button', class: 'btn btn-sm', onclick: () => moveDialog(ctx, goal) }, icon('swap', 'icon-sm'), 'Move') : null,
+      p.saved > 0 ? h('button', { type: 'button', class: 'btn btn-sm', onclick: () => moveMoneyDialog(ctx, { from: `pot:${goal.id}` }) }, icon('swap', 'icon-sm'), 'Move') : null,
       snoozeControl(ctx, state, goal, today)));
 }
 
@@ -323,45 +326,23 @@ export function contributionDialog(ctx, goal, sign) {
       field('Amount', h('input', { name: 'amount', class: 'input input-amount', inputmode: 'decimal', autocomplete: 'off', autofocus: true, placeholder: centsToInput(0, ctx.currency()) }),
         sign < 0 ? `${ctx.money(saved)} set aside so far. It goes back to your spending money.` : `Comes out of your spending money (${ctx.money(spending)} now).`),
       field('Date', h('input', { name: 'date', type: 'date', class: 'input', value: todayISO() }))),
-    onSubmit(data) {
+    async onSubmit(data) {
       const amount = parseAmount(data.get('amount'));
       if (!amount) throw new Error('Enter an amount greater than zero.');
       if (sign < 0 && amount > saved) throw new Error(`You can withdraw up to ${ctx.money(saved)}.`);
       const date = data.get('date');
       if (!isValidDate(date)) throw new Error('Choose a valid date.');
+      // Taking money out of savings asks first.
+      if (sign < 0 && isSavings(goal) && !(await confirmDip(ctx, goal, amount))) return false;
       ctx.store.addContribution(goal.id, { amount: sign * amount, date });
       ctx.toast(sign > 0 ? `Added ${ctx.money(amount)} to ${goal.name}` : `Withdrew ${ctx.money(amount)}`);
+      return true;
     },
   });
 }
 
-// Moves money from one set-aside to another, or back to spending money.
-function moveDialog(ctx, goal) {
-  const state = ctx.store.get();
-  const saved = potBalance(state, goal);
-  const others = sortedGoals(state).filter((g) => g.id !== goal.id);
-  openDialog({
-    title: `Move money from ${goal.name}`,
-    submitLabel: 'Move',
-    content: h('div', { class: 'form-grid' },
-      field('Amount', h('input', { name: 'amount', class: 'input input-amount', inputmode: 'decimal', autocomplete: 'off', autofocus: true, placeholder: centsToInput(0, ctx.currency()) }), `${ctx.money(saved)} in ${goal.name}`),
-      field('To', h('select', { name: 'to', class: 'input' }, others.map((g) => h('option', { value: g.id }, g.name)), h('option', { value: '' }, 'Spending money'))),
-      field('Date', h('input', { name: 'date', type: 'date', class: 'input', value: todayISO() }))),
-    onSubmit(data) {
-      const amount = parseAmount(data.get('amount'));
-      if (!amount) throw new Error('Enter an amount greater than zero.');
-      if (amount > saved) throw new Error(`You can move up to ${ctx.money(saved)}.`);
-      const date = data.get('date');
-      if (!isValidDate(date)) throw new Error('Choose a valid date.');
-      const to = others.find((g) => g.id === data.get('to'));
-      if (to) ctx.store.moveBetween(goal.id, to.id, { amount, date });
-      else ctx.store.addContribution(goal.id, { amount: -amount, date });
-      ctx.toast(`Moved ${ctx.money(amount)} to ${to ? to.name : 'spending money'}`);
-    },
-  });
-}
-
-export function goalDialog(ctx, goal = null) {
+// preset: { savings: true } starts a new set-aside ticked as savings.
+export function goalDialog(ctx, goal = null, preset = {}) {
   const state = ctx.store.get();
   const currency = ctx.currency();
   const nameOf = (id) => state.goals.find((g) => g.id === id)?.name ?? 'a deleted set-aside';
@@ -385,6 +366,7 @@ export function goalDialog(ctx, goal = null) {
     field('For spending on', h('select', { name: 'category', class: 'input', value: categories.some((c) => c.id === goal?.categoryId) ? goal.categoryId : '' },
       h('option', { value: '' }, 'Nothing in particular'), categories.map((c) => h('option', { value: c.id }, c.name))),
     'Optional. Expenses in this category are then pre-set to be paid from this set-aside.'),
+    checkbox('savings', 'This is savings (money I don’t plan to spend)', goal ? isSavings(goal) : !!preset.savings),
     checkbox('buffer', 'This is my safety buffer (emergency money)', !!goal?.buffer),
     history.length
       ? h('div', { class: 'history' },
@@ -427,7 +409,7 @@ export function goalDialog(ctx, goal = null) {
       const latest = ctx.store.get();
       const current = goal ? latest.goals.find((g) => g.id === goal.id) ?? goal : null;
       const contributions = current?.contributions ?? (saved ? [{ id: newId(), date: todayISO(), amount: saved, updatedAt: Date.now() }] : []);
-      const record = { ...current, name, target, deadline, schedule, categoryId: data.get('category') || null, buffer, contributions };
+      const record = { ...current, name, target, deadline, schedule, categoryId: data.get('category') || null, buffer, savings: data.get('savings') === 'on', contributions };
       // A new schedule joins the split for all income unless the set-aside already has its own rule there.
       if (schedule && !current?.plan) record.plan = { type: 'schedule' };
       if (!schedule && current?.plan?.type === 'schedule') record.plan = null;
