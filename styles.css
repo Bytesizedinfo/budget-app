@@ -214,7 +214,7 @@ code { font-size: 0.92em; background: var(--surface-2); padding: 1px 5px; border
 .view-intro { color: var(--ink-2); margin: -8px 0 18px; max-width: 60ch; }
 
 
-.stack { display: grid; gap: 16px; align-content: start; }
+.stack { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; align-content: start; }
 .stack.narrow { max-width: 720px; }
 .grid-2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 360px), 1fr)); gap: 16px; align-items: start; }
 .kpis { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; }
@@ -1144,3 +1144,66 @@ button.plan-line:hover { background: var(--surface-2); border-radius: 8px; }
 }
 
 .savings-total .range-note { margin: 10px 0 2px; }
+
+/* ---------- One month picture: Home's card, the Add form, the month plan ---------- */
+
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+
+.left-periods { grid-auto-columns: auto; max-width: 100%; }
+.left-periods span { padding: 5px 10px; }
+.left-custom { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; font-size: 14px; color: var(--ink-2); }
+.left-custom-part { display: inline-flex; align-items: center; gap: 6px; }
+.left-custom .input { height: 36px; width: auto; font-size: 15px; padding: 0 8px; }
+.left-custom .input-num { width: 68px; }
+.left-card .perday-label { margin-top: 6px; }
+.perday-month { font-size: 14px; color: var(--ink-2); }
+.left-budget { display: grid; gap: 6px; margin-top: 8px; }
+.left-budget-text { font-size: 13px; color: var(--muted); text-decoration: none; }
+.left-budget-text:hover { color: var(--accent-text); text-decoration: underline; }
+.left-card .perday-today { justify-content: flex-start; }
+.bd-lines { list-style: none; margin: 0; padding: 0; }
+.bd-lines li { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; padding: 6px 0; border-bottom: 1px solid var(--grid); font-size: 14px; }
+.bd-lines .amount { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.bd-lines .bd-total { font-weight: 700; }
+
+.split-box { display: grid; gap: 10px; max-height: min(46dvh, 420px); overflow: auto; padding: 10px 12px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface-2); }
+.split-box .input { background: var(--surface); }
+.split-box-title { font-size: 14px; font-weight: 700; }
+.split-fields { display: grid; gap: 12px; min-width: 0; }
+.aside-fields { display: grid; gap: 12px; }
+.aside-for { display: grid; max-height: 230px; overflow: auto; border: 1px solid var(--border); border-radius: 12px; }
+.aside-option { position: relative; display: flex; align-items: center; gap: 10px; padding: 9px 12px; cursor: pointer; }
+.aside-option + .aside-option { border-top: 1px solid var(--grid); }
+.aside-option input { width: 18px; height: 18px; margin: 0; flex: none; accent-color: var(--accent); }
+.aside-option:has(input:checked) { background: var(--accent-wash); }
+.aside-name { display: grid; min-width: 0; font-weight: 600; overflow-wrap: anywhere; }
+.aside-sub { font-size: 12.5px; font-weight: 400; color: var(--muted); font-variant-numeric: tabular-nums; }
+.aside-new { margin-top: 8px; }
+
+.budget-mode { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 12px; padding: 10px 12px; margin-bottom: 8px; border-radius: 10px; background: var(--surface-2); }
+.budget-mode-text { display: grid; gap: 1px; min-width: 0; }
+.budget-mode-text b { font-variant-numeric: tabular-nums; }
+.month-table { margin-top: 4px; }
+.month-table th[scope="row"] { font-weight: 400; color: var(--ink); white-space: normal; font-size: 14px; border-bottom: 1px solid var(--grid); }
+.month-table .plan-none { color: var(--muted); font-weight: 400; }
+.plan-months { max-width: 100%; }
+.plan-months span { white-space: normal; }
+.month-table th[scope="row"] .plan-sub { display: block; }
+.month-table th { vertical-align: top; }
+.month-table td.num { vertical-align: top; font-weight: 600; }
+.month-table .plan-name, .month-table .plan-open { font-weight: 600; }
+.plan-open { background: none; border: 0; padding: 0; font: inherit; color: inherit; text-align: left; cursor: pointer; border-bottom: 1px dashed var(--axis); }
+.plan-click { cursor: pointer; }
+.plan-click:hover th, .plan-click:hover td { background: var(--surface-2); }
+.plan-click:hover .plan-open { color: var(--accent-text); border-bottom-color: var(--accent); }
+.month-table .plan-total-row th, .month-table .plan-total-row td { border-top: 1px solid var(--axis); }
+.month-table .plan-total-row td.num { font-weight: 700; font-size: 15px; }
+.month-table .plan-left td.num { font-size: 18px; }
+.month-table .plan-group th { padding-top: 18px; color: var(--ink-2); font-size: 13px; font-weight: 700; white-space: normal; }
+.month-table td.bad { color: var(--critical-text); }
+@media (max-width: 599px) {
+  .section-tabs span { padding: 7px 10px; }
+  .month-table th, .month-table td { padding: 8px 4px; }
+  .month-table th[scope="row"] { font-size: 13.5px; }
+  .month-table .plan-sub { font-size: 12px; }
+}

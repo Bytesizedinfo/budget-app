@@ -1,8 +1,9 @@
-import { budgetLevel, budgetSummary, inRange, rangeMonths, rangeSpan, safeToSpend, sortCategories, sumBy } from '../calc.js';
-import { formatMonthName, formatShortDate, monthOf, timeframe, timeframeText, todayISO } from '../dates.js';
+import { budgetLevel, budgetSummary, inRange, rangeMonths, rangeSpan, sortCategories, sumBy } from '../calc.js';
+import { formatMonthName, monthOf, timeframe, timeframeText, todayISO } from '../dates.js';
 import { h, icon } from '../dom.js';
 import { centsToInput, parseAmount } from '../money.js';
-import { monthPlan, suggestBudgets } from '../forecast.js';
+import { suggestBudgets } from '../forecast.js';
+import { budgetChoice, budgetSettings, monthPicture } from '../month.js';
 import { categoryLeft, deleteCategoryChanges, moveMoneyDialog } from '../move.js';
 import { budgetRow, card, checkbox, confirmDialog, empty, field, meter, openDialog, segmented } from '../ui.js';
 
@@ -24,6 +25,7 @@ export function categoriesSection(ctx) {
   const scaled = scaleText(scale);
   const summary = budgetSummary(state, range, scale, rangeSpan(range, state, today));
   const thisMonth = range.month === monthOf(today); // Moves apply to this month's budgets.
+  const pic = monthPicture(state, monthOf(today), today, ctx.ui.left);
   const fromIncome = summary.rows.some((r) => r.fromIncome);
   const given = (row) => {
     if (!row.fromIncome) return row.adjust ? `Usual amount, ${row.adjust > 0 ? 'plus' : 'less'} ${ctx.money(Math.abs(row.adjust))} moved ${row.adjust > 0 ? 'in' : 'out'}` : null;
@@ -44,8 +46,8 @@ export function categoriesSection(ctx) {
           h('button', { type: 'button', class: 'btn btn-primary', onclick: () => moveMoneyDialog(ctx) }, icon('swap'), 'Move money'),
           h('button', { type: 'button', class: 'btn', onclick: () => amountsDialog(ctx) }, icon('edit'), 'Set monthly amounts'),
           h('button', { type: 'button', class: 'btn', onclick: () => categoryDialog(ctx) }, icon('plus'), 'New category'))),
-      limitCard(ctx, monthOf(today)),
-      summaryCard(ctx, summary, range, scaled),
+      spendingBudgetCard(ctx, pic),
+      summaryCard(ctx, summary, range, scaled, thisMonth ? pic : null),
       card({
         title: 'Spending categories',
         sub: `${timeframeText(range)}${scaled ? ` · monthly budgets scaled to ${scaled}` : ''}${fromIncome ? ' · budgets given from income' : ''}. Select a category to change its usual monthly amount.`,
@@ -90,8 +92,9 @@ export function amountsDialog(ctx, month = monthOf(todayISO())) {
   const state = ctx.store.get();
   const currency = ctx.currency();
   const today = todayISO();
-  const plan = monthPlan(state, month, today);
-  const before = plan.left + plan.categories.total; // What's left for categories once everything else is planned.
+  const planned = monthPicture(state, month, today, ctx.ui.left).planned;
+  const { plan } = planned;
+  const before = planned.amount; // The month's spending budget, as planned: what the categories share.
   const suggested = suggestBudgets(state, today);
   const categories = sortCategories(state.categories.filter((c) => c.kind === 'expense' && !c.archived));
   // Payments already planned in each category count inside its amount.
@@ -146,7 +149,9 @@ export function amountsDialog(ctx, month = monthOf(todayISO())) {
     title: 'Monthly amounts',
     submitLabel: 'Save amounts',
     content: h('div', { class: 'form-grid' },
-      h('p', { class: 'field-hint' }, `From ${ctx.money(plan.expected.amount)} expected income, after payments and set-asides, ${ctx.money(before)} is left for your categories. Payments already planned in a category count inside its amount.`),
+      h('p', { class: 'field-hint' }, `${budgetChoice(state.settings, month).mode === 'fixed'
+        ? `Your fixed spending budget for ${formatMonthName(month)} is ${ctx.money(before)}.`
+        : `Your spending budget for ${formatMonthName(month)} is ${ctx.money(before)} as planned (${ctx.money(plan.expected.amount)} expected income, after set-asides and payments${planned.carriedIn ? `, with ${ctx.money(planned.carriedIn)} carried in` : ''}).`} Payments already planned in a category count inside its amount.`),
       suggested.size
         ? h('button', { type: 'button', class: 'btn btn-sm amounts-suggest', onclick: suggest }, 'Suggest from my spending (average of the last 3 months)')
         : null,
@@ -174,53 +179,95 @@ export function amountsDialog(ctx, month = monthOf(todayISO())) {
 
 const needTag = (c) => (typeof c.need === 'boolean' ? h('span', { class: 'badge' }, c.need ? 'Need' : 'Want') : null);
 
-// One overall limit for everything spent in a month, bills included. Always about this month.
-function limitCard(ctx, month) {
-  const safe = safeToSpend(ctx.store.get(), month, todayISO());
-  if (!safe) {
-    return card({ title: 'Monthly spending limit', action: h('button', { type: 'button', class: 'btn btn-sm btn-primary', onclick: () => limitDialog(ctx) }, 'Set a limit') },
-      h('p', { class: 'card-text' }, 'One amount for all your spending each month, bills included. The Overview then shows what’s safe to spend today and this week.'));
-  }
-  const over = safe.left < 0;
-  return card({ title: 'Monthly spending limit', sub: formatMonthName(month), action: h('button', { type: 'button', class: 'btn btn-sm', onclick: () => limitDialog(ctx) }, icon('edit', 'icon-sm'), 'Change') },
-    h('dl', { class: 'totals' },
-      h('div', {}, h('dt', {}, 'Limit'), h('dd', {}, ctx.money(safe.limit))),
-      h('div', {}, h('dt', {}, 'Spent'), h('dd', {}, ctx.money(safe.spent))),
-      safe.reserved ? h('div', {}, h('dt', {}, 'Bills to come'), h('dd', {}, ctx.money(safe.reserved))) : null,
-      h('div', {}, h('dt', {}, over ? 'Over by' : 'Left'), h('dd', { class: over ? 'over' : '' }, ctx.money(Math.abs(safe.left))))),
-    meter((safe.spent + safe.reserved) / safe.limit, safe.level, 'meter-lg'),
-    safe.upcoming.length
-      ? h('p', { class: 'card-foot' }, `Set aside for bills: ${safe.upcoming.map((u) => `${u.rule.name} ${ctx.money(u.amount)} on ${formatShortDate(u.date)}`).join(', ')}.`)
-      : null);
+// ---------- The spending budget ----------
+// Automatic (the default): the income that counts in the month, plus what was carried in, less set-asides and
+// recurring and planned payments. Or a fixed amount, for one month or every month. See month.js.
+
+// How a month's spending budget is set, in a few words: "Automatic", "Fixed for November", "Fixed, every month".
+export function budgetModeText(budget, month) {
+  if (budget.mode !== 'fixed') return budget.scope === 'month' ? `Automatic for ${formatMonthName(month)}` : 'Automatic';
+  return budget.scope === 'month' ? `Fixed for ${formatMonthName(month)}` : 'Fixed, every month';
 }
 
-export function limitDialog(ctx) {
-  const current = ctx.store.get().settings.spendingLimit;
+// This month's spending budget, what's spent and what's left, with the choice of automatic or fixed.
+function spendingBudgetCard(ctx, pic) {
+  const { month } = pic;
+  const b = pic.budget;
+  const over = pic.leftToSpend < 0;
+  return card({
+    title: 'Spending budget',
+    sub: `${formatMonthName(month)} · ${budgetModeText(b, month)}`,
+    action: h('button', { type: 'button', class: 'btn btn-sm', onclick: () => spendingBudgetDialog(ctx, month) }, icon('edit', 'icon-sm'), 'Change'),
+    cls: 'spending-budget',
+  },
+    h('dl', { class: 'totals' },
+      h('div', {}, h('dt', {}, 'Budget'), h('dd', {}, ctx.money(b.amount))),
+      h('div', {}, h('dt', {}, 'Spent'), h('dd', {}, ctx.money(pic.spent))),
+      h('div', {}, h('dt', {}, over ? 'Short by' : 'Left'), h('dd', { class: over ? 'over' : '' }, ctx.money(Math.abs(pic.leftToSpend))))),
+    meter(b.amount > 0 ? pic.spent / b.amount : pic.spent > 0 ? 1 : 0, budgetLevel(pic.spent, Math.max(0, b.amount)), 'meter-lg'),
+    h('p', { class: 'card-foot' }, b.mode === 'fixed'
+      ? `Your income would allow ${ctx.money(b.auto)}.${pic.limitedBy === 'money' ? ' Your money runs out before your budget does, so what’s left follows your money.' : ''}`
+      : 'Worked out for you: the income that counts this month, plus anything carried in, less what you set aside and your recurring and planned payments. The Budget’s month plan shows each line.'));
+}
+
+// Chooses how a month's spending budget is set: automatic or a fixed amount, for that month only or every month.
+export function spendingBudgetDialog(ctx, month = monthOf(todayISO())) {
+  const state = ctx.store.get();
+  const today = todayISO();
+  const pic = monthPicture(state, month, today, ctx.ui.left);
+  const b = pic.budget;
+  const name = formatMonthName(month);
+  let mode = b.mode;
+  const start = b.fixed ?? b.limit ?? Math.max(0, b.auto);
+  const amount = h('input', { name: 'budget', class: 'input input-amount', inputmode: 'decimal', autocomplete: 'off', value: start > 0 ? centsToInput(start, ctx.currency()) : '', 'aria-label': 'Fixed amount' });
+  const amountField = field('Amount for the month', amount, `Your income would allow ${ctx.money(b.auto)}. What’s left to spend is the smaller of what this allows and what your money allows.`);
+  const autoHint = h('p', { class: 'field-hint' }, `The income that counts in ${name}, plus anything carried in, less what you set aside and your recurring and planned payments: ${ctx.money(b.auto)} so far.`);
+  const show = () => {
+    amountField.hidden = mode !== 'fixed';
+    autoHint.hidden = mode === 'fixed';
+  };
+  show();
   openDialog({
-    title: 'Monthly spending limit',
+    title: `Spending budget: ${name}`,
     content: h('div', { class: 'form-grid' },
-      field('Limit per month',
-        h('input', { name: 'limit', class: 'input input-amount', inputmode: 'decimal', autocomplete: 'off', autofocus: true, placeholder: 'No limit', value: current > 0 ? centsToInput(current, ctx.currency()) : '' }),
-        'Covers all your spending, bills included. Leave it empty to turn the limit off. Category budgets still work alongside it.')),
+      segmented('budget-mode', [['auto', 'Automatic'], ['fixed', 'A fixed amount']], mode, (next) => {
+        mode = next;
+        show();
+      }),
+      autoHint,
+      amountField,
+      h('div', { class: 'field' },
+        h('span', { class: 'field-label' }, 'Use it for'),
+        h('label', { class: 'checkbox' }, h('input', { type: 'radio', name: 'scope', value: 'month', checked: b.scope === 'month' }), h('span', {}, `${name} only`)),
+        h('label', { class: 'checkbox' }, h('input', { type: 'radio', name: 'scope', value: 'every', checked: b.scope !== 'month' }), h('span', {}, 'Every month')))),
     onSubmit(data) {
-      const text = String(data.get('limit') ?? '').trim();
-      if (!text) {
-        ctx.store.setSettings({ spendingLimit: null });
-        ctx.toast('Spending limit turned off');
-        return;
+      const scope = data.get('scope') === 'month' ? 'month' : 'every';
+      let cents = null;
+      if (mode === 'fixed') {
+        cents = parseAmount(String(data.get('budget') ?? '').trim());
+        if (!cents) throw new Error('Enter the amount, like 200 or 200.00.');
       }
-      const limit = parseAmount(text);
-      if (!limit) throw new Error('Enter the limit as an amount, like 200 or 200.00, or leave it empty.');
-      ctx.store.setSettings({ spendingLimit: limit });
-      ctx.toast(`Monthly limit set to ${ctx.money(limit)}`);
+      ctx.store.setSettings(budgetSettings(ctx.store.get().settings, month, { mode, amount: cents, scope }));
+      const when = scope === 'month' ? ` for ${name}` : ' for every month';
+      ctx.toast(mode === 'fixed' ? `Spending budget fixed at ${ctx.money(cents)}${when}` : `Spending budget set to automatic${when}`);
     },
   });
 }
 
-function summaryCard(ctx, { totalBudget, budgetedSpent, unbudgeted }, range, scaled) {
+// Kept for older callers: the monthly limit is now the fixed spending budget.
+export const limitDialog = (ctx) => spendingBudgetDialog(ctx);
+
+function summaryCard(ctx, { totalBudget, budgetedSpent, unbudgeted }, range, scaled, pic) {
+  // This month: how much of the spending budget the category budgets take.
+  const compare = pic
+    ? h('p', { class: 'card-foot' }, pic.categories.unbudgeted < 0
+      ? `Your category budgets for ${formatMonthName(pic.month)} take ${ctx.money(pic.categories.given)} of your ${ctx.money(pic.budget.amount)} spending budget: ${ctx.money(-pic.categories.unbudgeted)} more than it has. Payments already count inside it, so only the rest of each budget is counted.`
+      : `Your category budgets for ${formatMonthName(pic.month)} take ${ctx.money(pic.categories.given)} of your ${ctx.money(pic.budget.amount)} spending budget, and ${ctx.money(pic.categories.unbudgeted)} isn’t given to any category. Payments already count inside it, so only the rest of each budget is counted.`)
+    : null;
   if (!totalBudget) {
     return card({ title: 'Category budgets' },
-      h('p', { class: 'card-text' }, 'You can also give a spending category its own monthly limit: select it below. Budgets repeat every month, and you can change them any time.'));
+      h('p', { class: 'card-text' }, 'You can also give a spending category its own monthly limit: select it below. Budgets repeat every month, and you can change them any time.'),
+      compare);
   }
   const left = totalBudget - budgetedSpent;
   return card({ title: 'Category budgets at a glance', sub: `${timeframeText(range)}${scaled ? ` · monthly budgets scaled to ${scaled}` : ''}` },
@@ -229,7 +276,8 @@ function summaryCard(ctx, { totalBudget, budgetedSpent, unbudgeted }, range, sca
       h('div', {}, h('dt', {}, 'Spent'), h('dd', {}, ctx.money(budgetedSpent))),
       h('div', {}, h('dt', {}, left < 0 ? 'Over by' : 'Left'), h('dd', { class: left < 0 ? 'over' : '' }, ctx.money(Math.abs(left))))),
     meter(budgetedSpent / totalBudget, budgetLevel(budgetedSpent, totalBudget), 'meter-lg'),
-    unbudgeted ? h('p', { class: 'card-foot' }, `Plus ${ctx.money(unbudgeted)} spent in categories without a budget.`) : null);
+    unbudgeted ? h('p', { class: 'card-foot' }, `Plus ${ctx.money(unbudgeted)} spent in categories without a budget.`) : null,
+    compare);
 }
 
 export function categoryDialog(ctx, category = null) {

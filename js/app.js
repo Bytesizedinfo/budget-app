@@ -55,8 +55,9 @@ const ctx = {
     timeframe: loadTimeframe(),
     txFilter: { q: '', kind: 'all', category: 'all' },
     lastCategory: {},
-    // What "what you'd have left" counts, chosen on the home page and remembered on this device.
-    left: remembered('budget-left', { planned: true, wishes: false }),
+    // What "what you'd have left" counts and for how long (today, this week, this month, or custom: the next
+    // `days` days, or until a date), chosen on the home page and remembered on this device.
+    left: remembered('budget-left', { planned: true, wishes: false, period: 'month', days: 7, until: '' }),
   },
   currency: () => store.get().settings.currency,
   money: (cents, options) => formatMoney(cents, ctx.currency(), options),

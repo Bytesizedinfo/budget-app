@@ -6,17 +6,20 @@ Five places on a phone: **Home**, **Activity**, a **+** to add, **Budget** and *
 
 **Home**
 - **To confirm**: payments and income whose day has come. Nothing is recorded by itself: mark each one **Paid** (with the real amount), **Skip** it, or **Postpone** it.
-- **What you'd have left this month**: your spending money minus everything still to come out of it this month (payments to confirm, money moving into set-asides), and what that means per day. Switches add **planned payments** and the **wishlist items you tick**. "How is this worked out?" lists every item.
-- Safe to spend against an optional monthly limit, your total balance (set aside and spending money), income, spending and net for the time frame, and what's coming up this week. Tap any number to see how it's worked out.
+- **What you'd have left**, by the end of **today**, **this week**, **this month** or a **custom** number of days (or up to a date): your spending money minus everything still due in that time (payments to confirm, money moving into set-asides), what that allows per day, and always what a day would be to make it last to the end of the month. Today's spending has already come out, so it isn't added back. A bar shows what you've spent of this month's **spending budget**; at most one message says what matters most. Switches add **planned payments** and the **wishlist items you tick**. "How is this worked out?" shows the month line by line and every item still to come.
+- Your total balance (set aside and spending money), income, spending and net for the time frame, and what's coming up this week. Tap any number to see how it's worked out.
 - **Customise this page**: hide sections or change their order. The layout is saved with your budget, so every device matches.
 
 **Activity**
 - Every transaction as a **list** (search, filters, CSV export) or a **calendar**: what came in and went out each day, dots on days with payments to come, and each day's details with an Add button.
-- **Quick add** with a big amount and a number keypad that works as a calculator (12.50 + 4), a grid of categories (most recent first), Today/Yesterday, note suggestions, and "Save & add another".
+- **Add**: **Expense**, **Income** or **Set aside**, with a big amount and a number keypad that works as a calculator (12.50 + 4), a grid of categories (most recent first), Today/Yesterday, note suggestions, and "Save & add another".
+  - **Income**: where it goes is right in the form (savings, goals and wishlist, spending categories, and what's left unbudgeted), filled in from your default split as you type and re-filled when the amount or category changes, except rows you typed yourself. The presets are there too. One Save records the income and its split.
+  - **Set aside**: put money towards a wishlist item, goal or savings pot (each shows its progress), or **something new** (a name and price makes a wishlist item). It comes from your spending money, a category's budget or another set-aside, and you're warned if it takes your spending money below what's still due this month.
 
 **Budget**
-- **Month plan** for this month or next: expected income (what came in last month, or your own figure) minus recurring payments, planned payments, set-asides and category budgets = what's left unbudgeted, and per day. Over-planning is flagged. Every line opens its breakdown.
-- **Categories**: each category's budget for a month is what you give it when you split your income; in a month where income hasn't been given to categories, its usual monthly amount is used (set them together, or have them **suggested from your average spending**). **Move money** between categories, set-asides and unbudgeted money, and **cover** an overspent category. Mark each as a need or a want. **Deleting a category** lets you share out its budget and move its transactions to another one. Unspent money goes back to your spending money.
+- **Month plan** for this month or next, as a table with **Planned** and **So far** columns: carried in + income − set aside − recurring and planned payments = your **spending budget**; − spent = **left** (the same figure as Home). Then how much of the spending budget your category budgets take, and what's unbudgeted. Planned income that hasn't arrived is shown but not counted. Every line opens its breakdown; next month shows the planned column only.
+- **Spending budget**: automatic (income − set-asides − payments) or a **fixed amount**, for one month or every month. With a fixed amount you see both figures, and what's left is the smaller of what the budget and your money allow.
+- **Categories**: the spending budget with the same Automatic / Fixed choice, and how your category budgets compare with it. Each category's budget for a month is what you give it when you split your income; in a month where income hasn't been given to categories, its usual monthly amount is used (set them together, or have them **suggested from your average spending**). **Move money** between categories, set-asides and unbudgeted money, and **cover** an overspent category. Mark each as a need or a want. **Deleting a category** lets you share out its budget and move its transactions to another one. Unspent money goes back to your spending money.
 - **Savings**: the set-asides you mark as savings, with the total, what went in and out for the time frame, your savings rate, a growth chart, and everything taken out. The app asks before money leaves savings. Also a page of its own in the menu and a card on Home.
 - **Set-asides**: savings goals and pots, the default split for each kind of income (with the **Save for my goals** and **50/30/20** presets), saving schedules (an amount every N days, weeks or months; reach a target by a date or within a length of time), money set aside automatically or from income, moving money between set-asides, **snoozing** a set-aside for the month (nothing goes into it until next month, or until you resume it), a safety buffer, and checks on whether each goal is on track.
 
@@ -27,7 +30,7 @@ Five places on a phone: **Home**, **Activity**, a **+** to add, **Budget** and *
 - A **wishlist**: price, priority, link and note; saved up from income or automatically on a schedule; "ready around…", "buying it now would leave you…", a tick to count it on Home, Bought (paid from what was set aside), and a "saved by not buying" total.
 
 **Also**
-- **Split every income**: when income comes in, in any form, you're asked how much goes to **savings**, to **goals and wishlist items**, and to each **spending category**, with the rest left unbudgeted. It's filled in from your default split and each category's usual amount. A recurring or planned income can have its **split planned ahead**; it's filled in when the income arrives, and the Budget's month plan follows it.
+- **Split every income**: in the Add form, or when income is confirmed or waiting in "To split", you choose how much goes to **savings**, to **goals and wishlist items**, and to each **spending category**, with the rest left unbudgeted. It's filled in from your default split and each category's usual amount. A recurring or planned income can have its **split planned ahead**; it's filled in when the income arrives, and the Budget's month plan follows it.
 - The **time frame** (today, this week, the last 7 or 30 days, this month, last month, this year, all time, or your own dates) on every page that shows money. Budgets scale each monthly amount to the range.
 - Pay for an expense **from a set-aside**; a set-aside meant for a category is pre-selected for it.
 - **Insights**: plain-word findings and charts (money in and out, spending pace, where income went, categories, weekdays, income sources, balance over time). **Reports**: 12 months of income and spending.
@@ -125,6 +128,7 @@ js/sync.js                GitHub sync, local cache, conflict handling
 js/merge.js               merging two copies of the budget
 js/recurring.js           monthly recurring entries
 js/calc.js                totals, budgets, trends, goal progress
+js/month.js               one month picture (spending budget, what's left, per day) for Home, Budget and Insights
 js/charts.js              bar and column charts (no libraries)
 js/views/*.js             one file per page
 tests/                    in-browser tests

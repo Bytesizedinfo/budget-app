@@ -25,7 +25,7 @@ export function renderInsights(ctx) {
   const span = rangeSpan(range, state, today);
   const list = inRange(state.transactions, range);
   const f = facts(state, range, previous, today);
-  const p = pace(state, today);
+  const p = pace(state, today, ctx.ui.left);
   const axis = (cents) => formatCompact(cents, ctx.currency());
 
   return h('div', { class: 'view' },
@@ -79,9 +79,10 @@ function insightCard(ctx, state, f, p, range, previous, today) {
   }
   // These two are about now, whatever the time frame.
   const month = formatMonthName(p.month);
-  if (p.runOut === today) items.push({ level: 'warn', text: `This month: your spending money is used up${p.free < 0 ? ', and bills still to come need more than you have' : ''}.` });
-  else if (p.runOut) items.push({ level: 'warn', text: `This month: at about ${money(p.perDay)} a day, your spending money runs out around ${formatShortDate(p.runOut)}.` });
-  else if (p.perDay > 0) items.push({ level: 'good', text: `This month: at about ${money(p.perDay)} a day, your spending money lasts to the end of ${month}.` });
+  const what = p.limitedBy === 'budget' ? 'your budget' : 'your spending money';
+  if (p.runOut === today) items.push({ level: 'warn', text: `This month: ${what} is used up${p.free < 0 && p.limitedBy !== 'budget' ? ', and payments still to come need more than you have' : ''}.` });
+  else if (p.runOut) items.push({ level: 'warn', text: `This month: at about ${money(p.perDay)} a day, ${what} runs out around ${formatShortDate(p.runOut)}.` });
+  else if (p.perDay > 0) items.push({ level: 'good', text: `This month: at about ${money(p.perDay)} a day, ${what} lasts to the end of ${month}.` });
 
   const nw = needsWants(state, range);
   if (nw.sorted && nw.income > 0) {
@@ -141,7 +142,7 @@ function flowCard(ctx, list, span, range, axis) {
 function paceCard(ctx, p, axis) {
   const title = 'Spending pace this month';
   const month = formatMonthName(p.month);
-  if (!p.affordable) return card({ title, sub: month }, empty('No spending, and no spending money, so far this month.'));
+  if (!p.affordable) return card({ title, sub: month }, empty(`Nothing in your spending budget for ${month} yet.`));
   const day = (i) => dateInMonth(p.month, i + 1);
   const chart = lineChart({
     points: p.even.map((_, i) => ({ label: String(i + 1), longLabel: formatDay(day(i)) })),
@@ -150,15 +151,17 @@ function paceCard(ctx, p, axis) {
     formatAxis: axis,
     label: `Spending so far in ${month} against an even pace`,
   });
+  const what = p.limitedBy === 'budget' ? 'your budget' : 'your spending money';
   let verdict;
-  if (p.runOut && p.free <= 0) verdict = notice('warn', 'Your spending money is used up for this month.');
-  else if (p.runOut) verdict = notice('warn', `At about ${ctx.money(p.perDay)} a day, your spending money runs out around ${formatShortDate(p.runOut)}.`);
-  else if (p.ahead > 0) verdict = h('p', { class: 'chart-note' }, `You’re ${ctx.money(p.ahead)} ahead of an even pace, but at this rate your spending money still lasts the month.`);
+  if (p.runOut && p.free <= 0) verdict = notice('warn', `${what.charAt(0).toUpperCase()}${what.slice(1)} is used up for this month.`);
+  else if (p.runOut) verdict = notice('warn', `At about ${ctx.money(p.perDay)} a day, ${what} runs out around ${formatShortDate(p.runOut)}.`);
+  else if (p.ahead > 0) verdict = h('p', { class: 'chart-note' }, `You’re ${ctx.money(p.ahead)} ahead of an even pace, but at this rate ${what} still lasts the month.`);
   else verdict = h('p', { class: 'chart-note' }, `You’re ${ctx.money(-p.ahead)} under an even pace.`);
-  return card({ title, sub: `${month} · spending from your spending money` },
+  const budget = p.budget.mode === 'fixed' ? `your fixed ${month} budget (${ctx.money(p.affordable)})` : `${month}’s spending budget (${ctx.money(p.affordable)}: income, less set-asides and payments)`;
+  return card({ title, sub: `${month} · everyday spending, payments left out` },
     chart,
     verdict,
-    h('p', { class: 'chart-note muted' }, `The even pace spreads what ${month} can afford (${ctx.money(p.affordable)}: what you’ve spent plus the spending money you have) over the whole month.`),
+    h('p', { class: 'chart-note muted' }, `The even pace spreads ${budget} over the whole month.`),
     tableToggle(['Day', 'Spent so far', 'Even pace'], p.cumulative.map((value, i) => [formatDay(day(i)), ctx.money(value), ctx.money(p.even[i])])));
 }
 

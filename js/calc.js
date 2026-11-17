@@ -294,7 +294,8 @@ export function goalProgress(state, goal, today) {
 // What can be spent each day for the rest of this month, from the money actually there: spending money
 // (everything in minus everything out, less what's set aside) minus everything still to come out of it this
 // month (payments to confirm, automatic set-asides and, if asked, ticked wishlist items), shared over the days
-// left. Today's spending is added back first, so it only lowers today's share.
+// left, today included. Today's spending has already come out, so it isn't added back: what's left today is
+// the same share as any other day. (The month picture in month.js gives the same figures, and the budget.)
 // opts: { planned: count planned payments (default yes), wishes: count ticked wishlist items (default no) }.
 export function spendPerDay(state, today, opts = {}) {
   const month = monthOf(today);
@@ -302,10 +303,9 @@ export function spendPerDay(state, today, opts = {}) {
   const sim = leftThisMonth(state, today, opts);
   const spending = sim.start;
   const free = sim.end;
-  // Spending paid from a set-aside didn't come out of spending money, so it isn't added back.
+  // Today's everyday spending: payments, and anything paid from a set-aside, are counted elsewhere.
   const fromPot = paidFromPot(state);
-  const spentToday = totals(state.transactions.filter((t) => t.date === today && !fromPot(t))).expense;
-  const pool = Math.max(0, free + spentToday);
-  const perDay = Math.floor(pool / daysLeft);
-  return { spending, reserved: spending - free, upcoming: sim.events.filter((e) => e.amount < 0), free, daysLeft, spentToday, perDay, todayLeft: perDay - spentToday };
+  const spentToday = totals(state.transactions.filter((t) => t.date === today && !fromPot(t) && !(t.kind !== 'income' && t.recurringId))).expense;
+  const perDay = Math.floor(Math.max(0, free) / daysLeft);
+  return { spending, reserved: spending - free, upcoming: sim.events.filter((e) => e.amount < 0), free, daysLeft, spentToday, perDay, todayLeft: perDay };
 }

@@ -22,6 +22,7 @@ export function demoState(today) {
   const amount = (min, max) => Math.round((min + random() * (max - min)) * 100);
   const pick = (list) => list[Math.floor(random() * list.length)];
 
+  // The spending budget is automatic; this is the amount filled in if you choose a fixed one.
   state.settings.spendingLimit = 420000;
   // Splitting has been in use since late last month, so the latest pay is waiting to be split.
   state.settings.splitSince = dateInMonth(addMonths(monthOf(today), -1), 20);

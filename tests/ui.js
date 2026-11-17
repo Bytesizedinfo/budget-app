@@ -252,26 +252,44 @@ step('reports draw a 12-month chart with a table', async () => {
   expect($('#tooltip').textContent.includes('Income'), `tooltip lists income (tooltip says: "${$('#tooltip').textContent}")`);
 });
 
-step('the overview leads with what is safe to spend, by period, and the total balance', async () => {
+step('Home leads with what you’d have left, by period, remembered, and the total balance', async () => {
   await go('dashboard');
-  await until(() => $('.hero .segmented'), 'the safe-to-spend switch');
-  const label = () => $('.hero-label').textContent;
-  expect(/Safe to spend today|Over today’s share/.test(label()), label());
-  $$('.hero .segmented input')[1].click();
-  await until(() => /this week/.test(label()), 'the week view');
-  $$('.hero .segmented input')[2].click();
-  await until(() => /rest of/.test(label()) && !/week/.test(label()), 'the month view');
+  await until(() => $('.left-card input[data-period="month"]'), 'the period buttons');
+  const label = () => $('.left-card .perday-label').textContent;
+  const period = (value) => $(`.left-card input[data-period="${value}"]`);
+  period('today').click();
+  await until(() => /by the end of today/.test(label()), () => `today (${label()})`);
+  expect(/To make it last to the end of the month: .+ a day/.test($('.left-card').textContent), 'the month line under a shorter period');
+  period('week').click();
+  await until(() => /by the end of this week/.test(label()), 'this week');
+  period('custom').click();
+  const days = await until(() => $('.left-card input[data-period="days"]'), 'the custom days');
+  expect($('.left-card input[data-period="until"]'), 'and a date to go up to');
+  days.value = '10';
+  days.dispatchEvent(new Event('change', { bubbles: true }));
+  await until(() => /in 10 days \(to /.test(label()), () => `ten days (${label()})`);
+  const saved = JSON.parse(frame.contentWindow.localStorage.getItem('budget-left'));
+  expect(saved.period === 'custom' && saved.days === 10, `remembered on this device (${JSON.stringify(saved)})`);
+  await go('activity');
+  await go('dashboard');
+  await until(() => /in 10 days/.test(label()) && $('.left-card input[data-period="days"]')?.value === '10' && period('custom').checked, 'still ten days after the page is drawn again');
+  period('month').click();
+  await until(() => /by the end of/.test(label()) && !/To make it last/.test($('.left-card').textContent), 'back to this month');
+  expect(/a day for the \d+ days left in|for today, the last day/.test($('.perday-perday').textContent), $('.perday-perday').textContent);
   expect(/\d/.test($('.balance-value').textContent) && $('.balance-parts').textContent.includes('Set aside'), 'total balance shown');
 });
 
-step('what you’d have left sits next to safe to spend and explains itself', async () => {
+step('one card for what you’d have left: the spending budget, the switches, and how it’s worked out', async () => {
   const card = await until(() => $('.left-card'), 'the left card');
-  expect(/What you’d have left/.test(card.textContent) && /a day/.test($('.perday-perday').textContent), card.textContent);
-  expect(card.parentElement.classList.contains('home-grid') && $('.home-grid > [data-home="safe"]'), 'in the home grid with the safe-to-spend card');
+  expect(card.parentElement.classList.contains('home-grid') && card.dataset.home === 'left', 'in the home grid');
+  expect(!$('.home-grid > [data-home="safe"]') && !$('.hero'), 'no separate safe-to-spend card');
+  expect(/spent of .* spending budget/.test(card.textContent), `the spending budget bar (${card.textContent.slice(0, 300)})`);
+  expect(/Today: .* spent/.test($('.left-card .perday-today').textContent), 'today’s spending on its own line');
   expect($('[data-left="planned"]') && $('[data-left="wishes"]'), 'the planned and wishlist switches');
+  expect(card.querySelectorAll('.notice').length <= 1, 'one message at most');
   button('How is this worked out?', card).click();
   const dialog = await openDialog();
-  expect(/Shared over the/.test(dialog.textContent), dialog.textContent.slice(0, 200));
+  expect(/Shared over the/.test(dialog.textContent) && /Spending budget/.test(dialog.textContent) && /Carried in/.test(dialog.textContent) && /isn’t added back/.test(dialog.textContent), dialog.textContent.slice(0, 300));
   button('Done', dialog).click();
   await dialogClosed();
 });
@@ -305,25 +323,31 @@ step('adding an expense says what is left to spend today', async () => {
   fill(dialog, 'note', 'UI check snack');
   submit(dialog);
   await dialogClosed();
-  await until(() => /left to spend today|over today’s share|over your monthly limit/.test($('#toast').textContent), () => `the limit in the toast (says "${$('#toast').textContent}")`);
+  await until(() => /a day left to spend|over your budget this month|short this month/.test($('#toast').textContent), () => `what’s left in the toast (says "${$('#toast').textContent}")`);
 });
 
-step('the spending limit can be turned off and back on from Budgets', async () => {
+step('the spending budget can be fixed for this month, and set back to automatic', async () => {
   await go('budgets');
-  button('Change').click();
+  const budgetCard = () => $$('.card').find((c) => c.querySelector('.card-title')?.textContent === 'Spending budget');
+  await until(() => budgetCard() && /Automatic/.test(budgetCard().textContent), 'the spending budget card, automatic');
+  expect(!$$('.card').some((c) => /Monthly spending limit/.test(c.textContent)), 'no monthly limit card any more');
+  button('Change', budgetCard()).click();
   let dialog = await openDialog();
-  fill(dialog, 'limit', '');
+  dialog.querySelector('[name="budget-mode"][value="fixed"]').click();
+  fill(dialog, 'budget', '200');
+  dialog.querySelector('[name="scope"][value="month"]').click();
   submit(dialog);
   await dialogClosed();
+  await until(() => /Fixed for/.test(budgetCard().textContent) && /200\.00/.test(budgetCard().textContent) && /income would allow/.test(budgetCard().textContent), () => `fixed at 200 (${budgetCard().textContent.slice(0, 200)})`);
   await go('dashboard');
-  await until(() => !$('.hero .segmented') && /Left to spend|Over budget/.test($('.hero-label').textContent), 'the category-budget hero');
+  await until(() => /of your .*200\.00 budget · your income would allow/.test($('.left-card').textContent), () => `Home uses the fixed budget (${$('.left-card').textContent.slice(0, 300)})`);
   await go('budgets');
-  button('Set a limit').click();
+  button('Change', budgetCard()).click();
   dialog = await openDialog();
-  fill(dialog, 'limit', '4200');
+  dialog.querySelector('[name="budget-mode"][value="auto"]').click();
   submit(dialog);
   await dialogClosed();
-  await until(() => $$('.card').some((c) => c.textContent.includes('Monthly spending limit') && c.textContent.includes('4,200.00')), 'the limit card');
+  await until(() => /Automatic/.test(budgetCard().textContent) && !/Fixed/.test(budgetCard().textContent), 'automatic again');
 });
 
 step('changing currency reformats amounts', async () => {
@@ -332,8 +356,8 @@ step('changing currency reformats amounts', async () => {
   select.value = 'JPY';
   select.dispatchEvent(new Event('change', { bubbles: true }));
   await go('dashboard');
-  await until(() => $('.hero-value')?.textContent.includes('¥'), 'yen amounts');
-  expect(!$('.hero-value').textContent.includes('.'), 'no decimals for yen');
+  await until(() => $('.left-card .perday-value')?.textContent.includes('¥'), 'yen amounts');
+  expect(!$('.left-card .perday-value').textContent.includes('.'), 'no decimals for yen');
 });
 
 step('importing a Spend & Save backup adds its transactions and savings', async () => {
@@ -390,26 +414,34 @@ const pick = (value) => {
   select.dispatchEvent(new Event('change', { bubbles: true }));
 };
 
-step('new income asks where it should go, filled in from the default split', async () => {
+step('income is logged with its split in the Add form, filled in from the default split, with no second box', async () => {
   await go('plan');
   const tripBefore = savedIn('Trip to Japan');
   $('.btn-add').click();
-  let dialog = await openDialog();
+  const dialog = await openDialog();
+  expect(dialog.querySelector('.split-box').hidden, 'no split for an expense');
   dialog.querySelectorAll('.segmented input')[1].click(); // Income
+  await until(() => !dialog.querySelector('.split-box').hidden, 'the split inside the form');
   fill(dialog, 'amount', '1000');
   chooseCategory(dialog, 'c_salary');
   fill(dialog, 'note', 'UI check pay');
-  submit(dialog);
-  dialog = await until(() => $('dialog[open]')?.textContent.includes('Where should this go?') && $('dialog[open]'), 'the split dialog');
   const amount = (id) => dialog.querySelector(`[name="amt-${id}"]`).value;
-  expect(amount('demo-goal-emergency') === '100.00', `10% to the emergency fund (got "${amount('demo-goal-emergency')}")`);
+  await until(() => amount('demo-goal-emergency') === '100.00', () => `10% to the emergency fund (got "${amount('demo-goal-emergency')}")`);
   expect(/^\d+\.\d\d$/.test(amount('demo-goal-trip')) || amount('demo-goal-trip') === '', 'the trip is filled in from its monthly amount');
   expect(amount('demo-goal-gifts') === '', 'gifts are not in the default split');
+  expect(dialog.querySelector('[data-preset="ratio"]') && dialog.querySelector('[data-preset="goals"]'), 'the presets are there');
   fill(dialog, 'amt-demo-goal-trip', '200');
   await until(() => dialog.querySelector('.split-keep').textContent.includes('700.00'), () => `keep updates (${dialog.querySelector('.split-keep').textContent})`);
   expect(/a day to spend/.test(dialog.querySelector('.split-leaves').textContent), 'what it leaves per day');
+  // A new amount fills the split in again, except the row typed by hand.
+  fill(dialog, 'amount', '2000');
+  await until(() => amount('demo-goal-emergency') === '200.00' && amount('demo-goal-trip') === '200', () => `refilled, keeping the trip (${amount('demo-goal-emergency')}, ${amount('demo-goal-trip')})`);
+  fill(dialog, 'amount', '1000');
+  await until(() => amount('demo-goal-emergency') === '100.00', 'back to 1000');
   submit(dialog);
   await dialogClosed();
+  for (let i = 0; i < 10; i += 1) await new Promise((resolve) => requestAnimationFrame(resolve));
+  expect(!$('dialog[open]'), 'no second box opens');
   await until(() => savedIn('Trip to Japan') !== tripBefore, 'the trip set-aside to grow');
   await go('transactions');
   await until(() => $$('.tx-row').some((r) => r.textContent.includes('UI check pay') && r.textContent.includes('300.00 set aside')), 'the income row says what was set aside');
@@ -641,6 +673,41 @@ step('wishlist items save up like goals, show what buying leaves, and count on H
   await until(() => !wish() && /Bought and dropped \(\d+\)/.test($('.wishlist').textContent), 'moved to the bought list');
 });
 
+step('Set aside from the Add button: into a wishlist item, and into something new', async () => {
+  await go('recurring');
+  const wishCard = (name) => $$('.wish-card').find((c) => c.querySelector('.wish-name').textContent === name);
+  const saved = (name) => wishCard(name)?.querySelector('.goal-saved').textContent;
+  const before = saved('Instant camera');
+  $('.btn-add').click();
+  let dialog = await openDialog();
+  dialog.querySelector('.segmented input[value="setaside"]').click();
+  await until(() => !dialog.querySelector('.aside-fields').hidden && dialog.querySelector('.chips').hidden, 'the set-aside fields');
+  expect(/Set money aside/.test(dialog.querySelector('.dialog-head').textContent), 'the title says what it does');
+  fill(dialog, 'amount', '25');
+  const camera = dialog.querySelector('[name="for"][value="demo-wish-camera"]');
+  expect(camera && /of .*119\.00/.test(camera.closest('label').textContent), 'each one shows its progress');
+  camera.click();
+  expect(dialog.querySelector('[name="from"]').value === 'free' && /Spending money/.test(dialog.querySelector('[name="from"] option').textContent), 'from spending money');
+  submit(dialog);
+  await dialogClosed();
+  await until(() => saved('Instant camera') !== before && /25\.00/.test(saved('Instant camera')), () => `the camera to have 25 (${saved('Instant camera')})`);
+  $('.btn-add').click();
+  dialog = await openDialog();
+  dialog.querySelector('.segmented input[value="setaside"]').click();
+  fill(dialog, 'amount', '15');
+  dialog.querySelector('[name="for"][value="new"]').click();
+  await until(() => !dialog.querySelector('.aside-new').hidden, 'name and price');
+  submit(dialog);
+  await until(() => !dialog.querySelector('.form-error').hidden, 'it needs a name');
+  fill(dialog, 'new-name', 'UI check lamp');
+  fill(dialog, 'new-price', '45');
+  submit(dialog);
+  await dialogClosed();
+  await until(() => wishCard('UI check lamp') && /15\.00/.test(saved('UI check lamp')) && /45\.00/.test(wishCard('UI check lamp').textContent), 'the new wishlist item, with 15 set aside');
+  await go('transactions');
+  expect(!text('.tx-title').includes('UI check lamp'), 'setting aside isn’t a transaction');
+});
+
 step('the calendar shows each day, and adds on the day you pick', async () => {
   await go('transactions');
   $$('.section-tabs input')[1].click();
@@ -663,7 +730,8 @@ step('the month plan starts from expected income, and category amounts show what
   await until(() => $('[aria-current="page"]')?.dataset.route === 'budget', 'the Budget page');
   $$('.section-tabs input')[0].click();
   await until(() => $('.month-plan'), 'the month plan');
-  expect(/Expected income/.test($('.month-plan').textContent) && /Recurring payments/.test($('.month-plan').textContent) && /Left unbudgeted|Over-planned by/.test($('.month-plan').textContent), $('.month-plan').textContent.slice(0, 200));
+  const plan = $('.month-plan').textContent;
+  expect(['Planned', 'So far', 'Carried in', 'Income', 'Set aside', 'Recurring and planned payments', 'Spending budget', 'Spent', 'Left', 'Given to categories', 'Unbudgeted'].every((line) => plan.includes(line)), plan.slice(0, 300));
   $('.plan-income').click();
   let dialog = await openDialog();
   fill(dialog, 'expected', '9000');
@@ -678,6 +746,23 @@ step('the month plan starts from expected income, and category amounts show what
   await until(() => left() !== before, 'what’s left updates as you type');
   submit(dialog);
   await dialogClosed();
+});
+
+step('Budget’s So far column ends on the same Left as Home’s month figure', async () => {
+  await go('dashboard');
+  $('.left-card input[data-period="month"]').click();
+  await until(() => $('.left-card input[data-period="month"]').checked, 'this month on Home');
+  const home = $('.left-card .perday-value').textContent;
+  frame.contentWindow.location.hash = '#/budget';
+  await until(() => $('[aria-current="page"]')?.dataset.route === 'budget', 'the Budget page');
+  $$('.section-tabs input')[0].click();
+  const sofar = await until(() => $('.month-plan [data-line="left"] .plan-sofar'), 'the Left line');
+  expect(sofar.textContent === home, `Budget says ${sofar.textContent}, Home says ${home}`);
+  const budget = $('.month-plan [data-line="budget"] .plan-sofar').textContent;
+  expect(/\d/.test(budget) && $('.month-plan .budget-mode').textContent.includes(budget), `the spending budget line matches the control (${budget})`);
+  $$('.section-tools .segmented input')[1].click(); // Next month: planned only.
+  await until(() => !$('.month-plan [data-line="left"]') && !/So far/.test($('.month-plan thead').textContent), 'next month has the planned column only');
+  $$('.section-tools .segmented input')[0].click();
 });
 
 step('the keypad adds sums like a calculator', async () => {
@@ -716,16 +801,15 @@ step('a set-aside can be snoozed for the month and resumed', async () => {
   await until(() => /Snoozed for/.test(goalCard('Emergency fund').textContent) && button('Resume', goalCard('Emergency fund')), 'snoozed');
   // New income asks nothing for it this month.
   $('.btn-add').click();
-  let dialog = await openDialog();
+  const dialog = await openDialog();
   dialog.querySelectorAll('.segmented input')[1].click();
   fill(dialog, 'amount', '500');
   fill(dialog, 'note', 'UI check snooze pay');
-  submit(dialog);
-  dialog = await until(() => $('dialog[open]')?.textContent.includes('Where should this go?') && $('dialog[open]'), 'the split dialog');
   dialog.querySelector('[data-preset="default"]').click();
   await until(() => /Snoozed this month/.test(dialog.textContent), 'the split says it’s snoozed');
   expect(dialog.querySelector('[name="amt-demo-goal-emergency"]').value === '', 'nothing filled in for it');
-  button('Keep it all', dialog).click();
+  for (const input of dialog.querySelectorAll('.split-input')) fill(dialog, input.name, ''); // Keep it all.
+  submit(dialog);
   await dialogClosed();
   button('Resume', goalCard('Emergency fund')).click();
   await until(() => !/Snoozed for/.test(goalCard('Emergency fund').textContent), 'resumed');
@@ -737,8 +821,7 @@ step('the home page can be rearranged and sections hidden', async () => {
   expect(ids()[0] === 'left' && ids().includes('budgets'), ids().join(','));
   button('Customise this page').click();
   let dialog = await openDialog();
-  dialog.querySelector('[data-move="balance-1"]').click();
-  await until(() => dialog.querySelectorAll('.home-order li')[1].dataset.section === 'balance', 'balance moved up');
+  expect(!dialog.querySelector('[data-section="safe"]'), 'safe to spend is no longer a section of its own');
   dialog.querySelector('[data-move="balance-1"]').click();
   await until(() => dialog.querySelectorAll('.home-order li')[0].dataset.section === 'balance', 'balance first');
   dialog.querySelector('[name="show-budgets"]').click();
@@ -753,19 +836,17 @@ step('the home page can be rearranged and sections hidden', async () => {
 });
 
 
-step('income is split into savings, goals and spending categories, and Budget follows', async () => {
+step('income is split into savings, goals and spending categories in the Add form, and Budget follows', async () => {
   await go('dashboard');
   $('.btn-add').click();
-  let dialog = await openDialog();
+  const dialog = await openDialog();
   dialog.querySelectorAll('.segmented input')[1].click();
   fill(dialog, 'amount', '400');
   fill(dialog, 'note', 'UI check side job');
-  submit(dialog);
-  dialog = await until(() => $('dialog[open]')?.textContent.includes('Where should this go?') && $('dialog[open]'), 'the split dialog');
   expect(dialog.querySelector('.split-savings [name="amt-demo-goal-emergency"]'), 'the emergency fund is under Savings');
   expect(dialog.querySelector('.split-goals [name="amt-demo-goal-trip"]'), 'the trip is under Goals and wishlist');
   expect(dialog.querySelectorAll('.split-cats .split-row').length >= 3, 'spending categories are listed');
-  for (const input of dialog.querySelectorAll('.split-input')) input.value = '';
+  for (const input of dialog.querySelectorAll('.split-input')) fill(dialog, input.name, '');
   fill(dialog, 'amt-demo-goal-emergency', '40');
   fill(dialog, 'cat-c_fun', '70');
   await until(() => /290\.00/.test(dialog.querySelector('.split-unbudgeted').textContent), () => `left unbudgeted (${dialog.querySelector('.split-totals').textContent})`);

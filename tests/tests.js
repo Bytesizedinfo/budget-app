@@ -9,6 +9,7 @@ import { centsToInput, formatMoney, parseAmount } from '../js/money.js';
 import { bufferCheck, dateAfter, defaultSplit, planChecks, planSplit, plannedFor, presetSplit, rateInMonth, ratioOf, scheduleDue, setAsideIn, setAsideInMonth, sortedGoals, sourcesOf, suggestSplit, toSplit, tryPay, validSchedule } from '../js/pots.js';
 import { autoContributions, calendarDays, fundGoal, leftThisMonth, monthPlan, projectedOn, savedByNotBuying, simulate, suggestBudgets, timeline, wishInfo } from '../js/forecast.js';
 import { dueList, dueOccurrences, nextDate, nextOpen, occurrenceId, occurrenceIn, occurrenceTransaction, occurrences, occurrencesBetween, repeatWords, settledCount } from '../js/recurring.js';
+import { budgetChoice, budgetSettings, leftBy, monthPicture, periodEnd, spentOn } from '../js/month.js';
 import { createStore, emptyState, normalize, parseState, SCHEMA, seedState, serialize } from '../js/store.js';
 import { createSync, decodeBase64, encodeBase64 } from '../js/sync.js';
 import { fakeGitHub } from './fake-github.js';
@@ -673,8 +674,8 @@ test('spend per day comes from the money you have, less bills still to come', ()
   assert.equal(d.reserved, 3000, 'only the phone bill is still to come this month');
   assert.equal(d.daysLeft, 19);
   assert.equal(d.spentToday, 2000);
-  assert.equal(d.perDay, Math.floor((55000 - 3000 + 2000) / 19));
-  assert.equal(d.todayLeft, d.perDay - 2000);
+  assert.equal(d.perDay, Math.floor((55000 - 3000) / 19), 'today’s 20 has already come out, so it isn’t added back');
+  assert.equal(d.todayLeft, d.perDay, 'today gets the same share as any other day');
   state.transactions.push(tx('big', '2026-11-11', 60000));
   const short = spendPerDay(state, '2026-11-12');
   assert.ok(short.free < 0 && short.perDay === 0, 'nothing left after bills');
@@ -793,7 +794,7 @@ test('try a pay amount: the split, bills still to come and what is left per day'
   assert.equal(t.keep, 40000);
   assert.equal(t.bills, 3000);
   assert.equal(t.free, base.free + 40000);
-  assert.equal(t.perDay, Math.floor((base.free + 40000 + base.spentToday) / 19));
+  assert.equal(t.perDay, Math.floor((base.free + 40000) / 19));
 });
 
 test('planned vs set aside for a time frame', () => {
@@ -905,10 +906,12 @@ test('spending pace: day by day against an even pace, and when the money runs ou
   const state = seedState('SGD');
   state.transactions = [tx('i', '2026-11-01', 60000, { kind: 'income' }), tx('a', '2026-11-02', 10000), tx('b', '2026-11-10', 14000), tx('bill', '2026-11-05', 6000, { recurringId: 'r' })];
   const p = pace(state, '2026-11-10');
-  assert.deepEqual([p.cumulative[0], p.cumulative[1], p.cumulative[4], p.cumulative[9]], [0, 10000, 16000, 30000]);
-  assert.equal(p.affordable, 60000);
-  assert.deepEqual([p.even[9], p.even[29]], [20000, 60000]);
-  assert.equal(p.ahead, 10000, 'ahead of an even pace');
+  // The even pace is the month's spending budget (600 in, less the 60 payment), so the payment is left out of
+  // what's been spent too.
+  assert.deepEqual([p.cumulative[0], p.cumulative[1], p.cumulative[4], p.cumulative[9]], [0, 10000, 10000, 24000]);
+  assert.equal(p.affordable, 54000);
+  assert.deepEqual([p.even[9], p.even[29]], [18000, 54000]);
+  assert.equal(p.ahead, 6000, 'ahead of an even pace');
   assert.equal(p.perDay, 2400, 'bills are left out of the day-to-day pace');
   assert.equal(p.runOut, '2026-11-22', '30000 left at 2400 a day lasts 12 more days');
   state.transactions.push(tx('i2', '2026-11-10', 100000, { kind: 'income' }));
@@ -1432,6 +1435,150 @@ test('deleting a category shares its budget out and moves its transactions, paym
   const salary = s.categories.find((c) => c.id === 'c_salary');
   store.batch(deleteCategoryChanges(s, salary, { target: 'c_other_income', month: '2026-11' }));
   assert.equal(store.get().transactions.find((x) => x.id === 'pay').categoryId, 'c_other_income');
+});
+
+// ---------- one month picture ----------
+
+// Checks that a month's lines add up, and returns them.
+function addsUp(state, today, opts = {}) {
+  const p = monthPicture(state, today.slice(0, 7), today, opts);
+  assert.equal(p.carriedIn + p.income.received - p.setAside.done - p.payments.paid - p.spent, balance(state, today).spending, 'what has happened adds up to the spending money you have');
+  assert.equal(p.budget.auto, p.carriedIn + p.income.received - p.setAside.total - p.payments.total, 'the spending budget is the lines above it');
+  assert.equal(p.budget.auto - p.spent - p.wishes, p.left, 'spending budget − spent = left');
+  assert.equal(p.left, leftThisMonth(state, today, opts).end, 'left is what the forecast leaves at the end of the month');
+  return p;
+}
+
+// The screenshot's November: 846 in, 400 set aside, 442.92 spent (32 of it today).
+const novemberState = () => {
+  const state = seedState('SGD');
+  state.goals = [pot('save', { savings: true })];
+  state.transactions = [
+    tx('pay', '2026-11-01', 84600, { kind: 'income', categoryId: 'c_salary', split: { save: 40000 } }),
+    tx('a', '2026-11-03', 41092),
+    tx('b', '2026-11-16', 3200),
+  ];
+  return state;
+};
+
+test('the month picture adds up: left is the spending money you have, less what is still due this month', () => {
+  // The screenshot's month.
+  let p = addsUp(novemberState(), '2026-11-16');
+  assert.deepEqual([p.carriedIn, p.income.received, p.setAside.total, p.payments.total, p.budget.auto, p.spent, p.left], [0, 84600, 40000, 0, 44600, 44292, 308]);
+  // Pay that counts in another month: October's pay for November counts now; November's pay for December is
+  // carried along with what was left from October.
+  let state = seedState('SGD');
+  state.transactions = [
+    tx('oct', '2026-10-26', 80000, { kind: 'income', month: '2026-11' }),
+    tx('dec', '2026-11-05', 30000, { kind: 'income', month: '2026-12' }),
+    tx('o1', '2026-10-28', 5000), tx('n1', '2026-11-06', 2000),
+  ];
+  p = addsUp(state, '2026-11-12');
+  assert.deepEqual([p.income.received, p.income.countsLater, p.carriedIn, p.spent], [80000, 30000, 25000, 2000]);
+  // A past month is worked out as of its last day.
+  const oct = monthPicture(state, '2026-10', '2026-11-12');
+  assert.deepEqual([oct.past, oct.income.received, oct.spent, oct.carriedIn, oct.left, oct.budget.auto - oct.spent], [true, 0, 5000, 80000, 75000, 75000]);
+  // Expenses paid from set-asides aren't spending; money put aside in October left a shortfall behind.
+  p = addsUp(potState(), '2026-11-12');
+  assert.deepEqual([p.setAside.done, p.spent, p.fromPots, p.carriedIn], [30000, 4000, 6000, -30000]);
+  // A payment paid from the money held for it is neither a payment nor spending this month.
+  state = seedState('SGD');
+  state.recurring = [rule({ id: 'rent', amount: 50000, startDate: '2026-11-05' }), rule({ id: 'phone', amount: 3000, startDate: '2026-11-20' })];
+  state.goals = [{ id: 'bill_rent', name: 'Rent', billId: 'rent', target: null, contributions: [{ id: 'h', date: '2026-10-20', amount: 50000 }], updatedAt: 1 }];
+  state.transactions = [tx('i', '2026-10-01', 120000, { kind: 'income' }), tx(occurrenceId('rent', '2026-11'), '2026-11-05', 50000, { recurringId: 'rent', potId: 'bill_rent' })];
+  p = addsUp(state, '2026-11-12');
+  assert.deepEqual([p.payments.paid, p.payments.toCome, p.fromPots, p.carriedIn, p.budget.auto], [0, 3000, 50000, 70000, 67000]);
+  // A payment paid from spending money, and automatic moves (recorded and still to come).
+  state.transactions.push(tx('r_phone_x', '2026-11-08', 2500, { recurringId: 'phone' }));
+  p = addsUp(state, '2026-11-12');
+  assert.equal(p.payments.total, 2500 + 3000);
+  p = addsUp(leftState(), '2026-11-12');
+  assert.deepEqual([p.setAside.done, p.setAside.toCome, p.payments.toCome, p.carriedIn, p.left], [1000 + 4900, 2000, 8000, 0, 84100]);
+  p = addsUp(leftState(), '2026-11-12', { planned: false });
+  assert.equal(p.left, 89100, 'without planned payments');
+  p = addsUp(leftState(), '2026-11-12', { wishes: true });
+  assert.deepEqual([p.wishes, p.left, p.budget.auto - p.spent], [30000, 54100, 84100], 'the ticked wish comes off what is left, not the budget');
+  // Money carried in from an earlier month.
+  state = seedState('SGD');
+  state.transactions = [tx('i', '2026-10-01', 50000, { kind: 'income' }), tx('o', '2026-10-15', 20000), tx('n', '2026-11-02', 1000)];
+  p = addsUp(state, '2026-11-12');
+  assert.deepEqual([p.carriedIn, p.budget.auto, p.left], [30000, 30000, 29000]);
+  // Overdrawn: more spent than came in, with a payment still to come.
+  state = seedState('SGD');
+  state.recurring = [rule({ id: 'phone', amount: 3000, startDate: '2026-11-20' })];
+  state.transactions = [tx('i', '2026-11-01', 10000, { kind: 'income' }), tx('a', '2026-11-03', 15000)];
+  p = addsUp(state, '2026-11-12');
+  assert.deepEqual([p.spending, p.budget.auto, p.left, p.perDay], [-5000, 7000, -8000, 0]);
+  // Next month has the planned column only, starting from what this month is set to leave.
+  const next = monthPicture(leftState(), '2026-12', '2026-11-12');
+  assert.deepEqual([next.future, next.carriedIn, next.planned.carriedIn], [true, 84100, 84100]);
+});
+
+test('the spending budget is automatic unless a fixed amount is chosen, for one month or every month', () => {
+  const state = novemberState();
+  const today = '2026-11-16';
+  const pick = () => {
+    const p = monthPicture(state, '2026-11', today);
+    return [p.budget.mode, p.budget.scope, p.budget.amount, p.leftToSpend, p.limitedBy];
+  };
+  assert.deepEqual(pick(), ['auto', 'every', 44600, 308, null]);
+  state.settings.spendingLimit = 20000;
+  assert.deepEqual(pick(), ['auto', 'every', 44600, 308, null], 'a limit on its own changes nothing');
+  state.settings.budgetMode = 'fixed';
+  assert.deepEqual(pick(), ['fixed', 'every', 20000, 20000 - 44292, 'budget'], 'every month: over the 200 budget');
+  assert.equal(monthPicture(state, '2026-11', today).budget.auto, 44600, 'what income would allow is still there');
+  state.settings.budgets = { '2026-11': 'auto' };
+  assert.deepEqual(pick(), ['auto', 'month', 44600, 308, null], 'this month only, back to automatic');
+  state.settings.budgets = { '2026-11': 50000 };
+  assert.deepEqual(pick(), ['fixed', 'month', 50000, 308, 'money'], 'the budget allows 57.08, the money only 3.08');
+  assert.deepEqual([monthPicture(state, '2026-12', today).budget.mode, monthPicture(state, '2026-12', today).budget.amount], ['fixed', 20000], 'other months follow the default');
+  assert.equal(budgetChoice({ budgetMode: 'fixed' }, '2026-11').mode, 'auto', 'fixed without an amount is automatic');
+  // What the Automatic / Fixed control saves.
+  assert.deepEqual(budgetSettings({ budgetMode: 'fixed', spendingLimit: 20000 }, '2026-11', { mode: 'auto', scope: 'month' }), { budgets: { '2026-11': 'auto' } });
+  assert.deepEqual(budgetSettings({}, '2026-11', { mode: 'auto', scope: 'month' }), { budgets: {} }, 'the same as the default needs nothing');
+  assert.deepEqual(budgetSettings({}, '2026-11', { mode: 'fixed', amount: 30000, scope: 'month' }), { budgets: { '2026-11': 30000 } });
+  assert.deepEqual(budgetSettings({ budgets: { '2026-11': 'auto', '2026-10': 1 } }, '2026-11', { mode: 'fixed', amount: 30000, scope: 'every' }), { budgets: { '2026-10': 1 }, budgetMode: 'fixed', spendingLimit: 30000 });
+  assert.deepEqual(budgetSettings({ budgetMode: 'fixed', spendingLimit: 30000 }, '2026-11', { mode: 'auto', scope: 'every' }), { budgets: {}, budgetMode: 'auto' });
+});
+
+test('what you would have left by the end of today, this week, this month or a custom period', () => {
+  const state = leftState();
+  const today = '2026-11-12'; // a Thursday
+  assert.deepEqual([periodEnd('today', today), periodEnd('week', today), periodEnd('month', today)], ['2026-11-12', '2026-11-15', '2026-11-30']);
+  assert.deepEqual([periodEnd('week', '2026-11-16'), periodEnd('week', '2026-11-15'), periodEnd('week', '2026-11-30')], ['2026-11-22', '2026-11-15', '2026-12-06'], 'weeks run Monday to Sunday');
+  assert.deepEqual([periodEnd('custom', today, { days: 10 }), periodEnd('custom', today, { until: '2026-11-25' }), periodEnd('custom', today, { days: 3, until: '2026-11-01' })], ['2026-11-21', '2026-11-25', '2026-11-14']);
+  const pick = (until, opts) => {
+    const l = leftBy(state, today, until, opts);
+    return [l.start, l.due, l.left, l.days, l.perDay];
+  };
+  assert.deepEqual(pick('2026-11-12'), [94100, 0, 94100, 1, 94100], 'today');
+  assert.deepEqual(pick('2026-11-15'), [94100, 0, 94100, 4, Math.floor(94100 / 4)], 'this week');
+  assert.deepEqual(pick('2026-11-30'), [94100, 10000, 84100, 19, Math.floor(84100 / 19)], 'this month');
+  assert.deepEqual(pick('2026-11-21'), [94100, 4000, 90100, 10, 9010], 'the next 10 days: one automatic move and the phone bill');
+  assert.deepEqual(pick('2026-11-25', { planned: false }), [94100, 5000, 89100, 14, Math.floor(89100 / 14)], 'to the 25th, without the planned gift');
+  assert.equal(leftBy(state, today, '2026-11-30', { planned: false }).left, 89100);
+  assert.equal(leftBy(state, today, '2026-11-30', { wishes: true }).left, 54100);
+  assert.equal(leftBy(state, today, today, { wishes: true }).left, 94100 - 30000, 'a ticked wish is bought today');
+  for (const opts of [{}, { planned: false }, { wishes: true }, { planned: false, wishes: true }]) {
+    assert.equal(leftBy(state, today, '2026-11-30', opts).left, monthPicture(state, '2026-11', today, opts).left, 'this month matches the month picture');
+  }
+});
+
+test('per day is what is left shared over the days, without adding today’s spending back', () => {
+  const state = novemberState();
+  const today = '2026-11-16'; // 15 days left, today included
+  const p = monthPicture(state, '2026-11', today);
+  assert.deepEqual([p.daysLeft, p.spentToday, p.perDay], [15, 3200, Math.floor(308 / 15)], '3.08 over 15 days is about 0.20 a day');
+  const d = spendPerDay(state, today);
+  assert.deepEqual([d.free, d.spentToday, d.perDay], [308, 3200, Math.floor(308 / 15)], 'the older helper agrees');
+  assert.equal(leftBy(state, today, '2026-11-30').perDay, Math.floor(308 / 15));
+  // Payments and spending from a set-aside aren't today's spending.
+  state.transactions.push(tx('bill', today, 1000, { recurringId: 'r' }), tx('gift', today, 500, { potId: 'save' }));
+  assert.equal(spentOn(state, today), 3200);
+  // With a fixed budget, per day follows whichever is smaller: what the budget or the money allows.
+  state.settings.budgets = { '2026-11': 60000 };
+  const fixed = monthPicture(state, '2026-11', today);
+  assert.deepEqual([fixed.limitedBy, fixed.perDay], ['money', Math.floor(Math.max(0, fixed.left) / 15)]);
 });
 
 // ---------- runner ----------

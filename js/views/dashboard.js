@@ -1,25 +1,23 @@
-import { balance, budgetLevel, budgetSummary, byNewest, categoryName, goalProgress, inRange, monthKey, paidFromPot, potEntries, safeToSpend, spendByCategory, spendPerDay, sumBy, totals } from '../calc.js';
+import { balance, budgetLevel, budgetSummary, byNewest, categoryName, goalProgress, inRange, monthKey, paidFromPot, potEntries, spendByCategory, sumBy, totals } from '../calc.js';
 import { barList } from '../charts.js';
-import { dayOf, daysInMonth, formatMonth, formatMonthName, formatShortDate, monthOf, previousTimeframe, timeframe, timeframeText, todayISO } from '../dates.js';
+import { formatMonth, formatMonthName, formatShortDate, isValidDate, monthOf, previousTimeframe, timeframe, timeframeText, todayISO } from '../dates.js';
 import { h, icon } from '../dom.js';
 import { formatApprox } from '../money.js';
 import { dueCard } from '../due.js';
 import { timeline } from '../forecast.js';
 import { pace } from '../insights.js';
+import { customDays, leftBy, monthPicture, PERIODS, periodEnd } from '../month.js';
 import { isWish, sortedGoals } from '../pots.js';
 import { toSplitCard } from '../split.js';
 import { transactionDialog, txRow } from '../tx.js';
 import { budgetRow, card, cardLink, checkbox, empty, meter, notice, openDialog, remember, segmented, signedAmount, timeframePicker, viewHead } from '../ui.js';
 import { eventRow } from './upcoming.js';
-import { limitDialog } from './budgets.js';
 import { savingsHomeCard } from './savings.js';
 
-const RANGES = [['today', 'Today'], ['week', 'This week'], ['month', 'This month']];
-
 // The sections of the home page that can be reordered or hidden (To confirm and To split always lead).
+// A layout saved while "Safe to spend" was a section of its own still works: unknown ids are left out.
 const SECTIONS = [
   ['left', 'What you’d have left'],
-  ['safe', 'Safe to spend (monthly limit)'],
   ['balance', 'Total balance'],
   ['savings', 'Savings'],
   ['stats', 'Income, spent and net'],
@@ -43,8 +41,8 @@ export function homeLayout(state) {
 export function renderDashboard(ctx) {
   const state = ctx.store.get();
   const today = todayISO();
-  // Safe to spend, spend per day and budgets are always about the rest of this month. Everything else follows
-  // the time frame picked at the top (shared with every other page).
+  // What you'd have left picks its own period, and budgets are about this month. Everything else follows the
+  // time frame picked at the top (shared with every other page).
   const month = monthOf(today);
   const range = timeframe(ctx.ui.timeframe.choice, today, ctx.ui.timeframe);
   const previous = previousTimeframe(range);
@@ -52,12 +50,9 @@ export function renderDashboard(ctx) {
   const now = totals(transactions);
   const before = previous ? totals(inRange(state.transactions, previous)) : null;
   const budgets = budgetSummary(state, month);
-  const safe = safeToSpend(state, month, today);
-  const daily = spendPerDay(state, today, ctx.ui.left);
 
   const build = {
-    left: () => leftCard(ctx, state, daily, safe, month, pace(state, today)),
-    safe: () => (safe ? safeHero(ctx, safe, month) : hero(ctx, budgets, month, today)),
+    left: () => leftCard(ctx, state, today),
     balance: () => balanceCard(ctx, state, today),
     savings: () => savingsHomeCard(ctx, state, range),
     stats: () => h('div', { class: 'stack home-stats' },
@@ -137,108 +132,93 @@ function homeDialog(ctx) {
   });
 }
 
-// The one number this page leads with when there's an overall monthly limit: what's safe to spend.
-function safeHero(ctx, safe, month) {
+// The card Home leads with: what you'd have left by the end of a period you pick (today, this week, this
+// month, or a number of days or a date), what that allows per day, and how this month's spending compares with
+// its spending budget. Everything comes from the month picture (month.js), so Budget shows the same figures.
+// The switches add planned payments and ticked wishlist items; the choices are remembered on this device.
+function leftCard(ctx, state, today) {
+  const opts = ctx.ui.left;
+  const month = monthOf(today);
   const name = formatMonthName(month);
-  const bar = meter((safe.spent + safe.reserved) / safe.limit, safe.level, 'meter-lg');
-  const breakdown = h('p', { class: 'hero-sub' }, [
-    `${ctx.money(safe.spent)} spent`,
-    safe.reserved ? `${ctx.money(safe.reserved)} in bills still to come` : null,
-    `${ctx.money(safe.limit)} limit`,
-    safe.fromPots ? `${ctx.money(safe.fromPots)} paid from set-asides isn’t counted` : null,
-  ].filter(Boolean).join(' · '));
-
-  if (safe.past) {
-    const over = safe.left < 0;
-    return card({ cls: 'hero' },
-      h('p', { class: `hero-label${over ? ' over' : ''}` }, over ? [icon('alert', 'icon-sm'), `Over your limit in ${name}`] : `Under your limit in ${name}`),
-      h('p', { class: 'hero-value' }, ctx.money(Math.abs(safe.left))),
-      bar,
-      breakdown);
-  }
-  if (safe.left < 0) {
-    return card({ cls: 'hero' },
-      h('p', { class: 'hero-label over' }, icon('alert', 'icon-sm'), safe.future ? `Bills go over your limit in ${name}` : `Over your limit for ${name}`),
-      h('p', { class: 'hero-value' }, ctx.money(-safe.left)),
-      bar,
-      breakdown,
-      notice('over', safe.future
-        ? `Your bills for ${name} add up to more than your ${ctx.money(safe.limit)} limit.`
-        : `Nothing more is safe to spend in ${name} without going further over your ${ctx.money(safe.limit)} limit.`));
-  }
-  if (safe.future) {
-    return card({ cls: 'hero' },
-      h('p', { class: 'hero-label' }, `Safe to spend in ${name}`),
-      h('p', { class: 'hero-value' }, ctx.money(safe.left)),
-      bar,
-      breakdown);
-  }
-
-  // This month: switch between today, the rest of this week and the rest of the month.
-  const label = h('p', { class: 'hero-label' });
-  const value = h('p', { class: 'hero-value' });
-  const show = (range) => {
-    ctx.ui.safeRange = range;
-    const amount = range === 'today' ? safe.todayLeft : range === 'week' ? safe.weekLeft : safe.left;
-    const when = range === 'today' ? 'today' : range === 'week' ? 'for the rest of this week' : `for the rest of ${name}`;
-    label.textContent = amount < 0 ? `Over ${range === 'today' ? 'today’s' : 'this week’s'} share by` : `Safe to spend ${when}`;
-    value.textContent = ctx.money(Math.abs(amount));
+  const period = PERIODS.some(([id]) => id === opts.period) ? opts.period : 'month';
+  const pic = monthPicture(state, month, today, opts);
+  const lb = leftBy(state, today, periodEnd(period, today, opts), opts);
+  const b = pic.budget;
+  const fixed = b.mode === 'fixed';
+  // With a fixed budget, what's left can't be more than the budget allows either.
+  const shown = period === 'month' ? pic.leftToSpend : fixed ? Math.min(lb.left, b.fixed - pic.spent - pic.wishes) : lb.left;
+  const perDay = Math.floor(Math.max(0, shown) / lb.days);
+  const when = { today: 'today', week: 'this week', month: name }[period] ?? null;
+  const set = (patch) => {
+    ctx.ui.left = { ...ctx.ui.left, ...patch };
+    remember('budget-left', ctx.ui.left);
+    ctx.refresh();
   };
-  const range = ctx.ui.safeRange ?? 'today';
-  show(range);
-  return card({ cls: 'hero' },
-    h('div', { class: 'hero-top' }, label, segmented('safe-range', RANGES, range, show, 'segmented-sm')),
-    value,
-    h('p', { class: 'hero-sub' }, safe.daysLeft === 1
-      ? `${ctx.money(safe.perDay)} for today, the last day of ${name}`
-      : `About ${ctx.money(safe.perDay)} a day for the ${safe.daysLeft} days left in ${name}`),
-    bar,
-    breakdown,
-    safe.level === 'warn'
-      ? notice('warn', `You’re spending faster than your limit allows: about ${ctx.money(safe.perDay)} a day left, against ${ctx.money(safe.evenShare)} a day if spread evenly.`)
-      : null);
-}
 
-// What would be left of spending money this month once everything still to come has gone out: payments to
-// confirm, automatic set-asides and, with the switches, planned payments and ticked wishlist items. Shared
-// over the days left, it's what can be spent each day.
-function leftCard(ctx, state, d, safe, month, p) {
-  const name = formatMonthName(month);
-  const overToday = d.todayLeft < 0;
+  const periods = segmented('left-period', PERIODS, period, (next) => set({ period: next }), 'segmented-sm left-periods');
+  for (const input of periods.querySelectorAll('input')) input.dataset.period = input.value;
+  const custom = period === 'custom' ? h('div', { class: 'left-custom' },
+    h('label', { class: 'left-custom-part' }, 'Next',
+      h('input', { id: 'left-days', type: 'number', class: 'input input-num', min: 1, max: 366, inputmode: 'numeric', 'aria-label': 'Number of days', value: String(lb.days), dataset: { period: 'days' }, onchange: (event) => set({ days: customDays(event.target.value), until: '' }) }),
+      'days'),
+    h('label', { class: 'left-custom-part' }, 'or until',
+      h('input', { id: 'left-until', type: 'date', class: 'input', min: today, 'aria-label': 'Until', value: lb.until, dataset: { period: 'until' }, onchange: (event) => { if (isValidDate(event.target.value)) set({ until: event.target.value }); } }))) : null;
+
+  const label = period === 'custom'
+    ? `What you’d have left in ${lb.days === 1 ? '1 day' : `${lb.days} days`} (to ${formatShortDate(lb.until)})`
+    : `What you’d have left by the end of ${when}`;
+  let perDayText;
+  if (lb.days === 1) perDayText = period === 'month' ? ' for today, the last day of the month' : ' for today';
+  else perDayText = ` a day for the ${lb.days} days${period === 'month' ? ` left in ${name}` : ''}`;
+
   const ticked = state.goals.filter((g) => isWish(g) && g.wish.tick && !g.wish.boughtTxId && !g.wish.dropped);
-  const toggle = (key, label, hint) => h('label', { class: 'switch' },
-    h('input', {
-      type: 'checkbox',
-      role: 'switch',
-      checked: !!ctx.ui.left[key],
-      dataset: { left: key },
-      onchange: (event) => {
-        ctx.ui.left = { ...ctx.ui.left, [key]: event.target.checked };
-        remember('budget-left', ctx.ui.left);
-        ctx.refresh();
-      },
-    }),
+  const toggle = (key, text, hint) => h('label', { class: 'switch' },
+    h('input', { type: 'checkbox', role: 'switch', checked: !!opts[key], dataset: { left: key }, onchange: (event) => set({ [key]: event.target.checked }) }),
     h('span', { class: 'switch-track', 'aria-hidden': 'true' }),
-    h('span', {}, label, hint ? h('span', { class: 'switch-hint' }, hint) : null));
+    h('span', {}, text, hint ? h('span', { class: 'switch-hint' }, hint) : null));
+
+  const ratio = b.amount > 0 ? pic.spent / b.amount : pic.spent > 0 ? 1 : 0;
+  const budgetLine = fixed
+    ? `${ctx.money(pic.spent)} spent of your ${ctx.money(b.fixed)} budget · your income would allow ${ctx.money(b.auto)}`
+    : `${ctx.money(pic.spent)} spent of ${ctx.money(b.amount)} spending budget`;
+
   return card({ cls: 'perday left-card' },
-    h('p', { class: 'perday-label' }, `What you’d have left in ${name}`),
-    h('p', { class: `perday-value${d.free < 0 ? ' bad' : ''}` }, ctx.money(d.free)),
-    h('p', { class: 'perday-perday' }, h('b', {}, ctx.money(d.perDay)), d.daysLeft === 1 ? ' for today, the last day of the month' : ` a day for the ${d.daysLeft} days left`),
-    h('p', { class: 'hero-sub' }, `From the ${ctx.money(d.spending)} spending money you have${d.reserved ? `, after ${ctx.money(d.reserved)} still to come out` : ''}.`),
+    periods,
+    custom,
+    h('p', { class: 'perday-label' }, label),
+    h('p', { class: `perday-value${shown < 0 ? ' bad' : ''}` }, ctx.money(shown)),
+    h('p', { class: 'perday-perday' }, h('b', {}, ctx.money(perDay)), perDayText),
+    period === 'month' ? null : h('p', { class: 'perday-month' }, `To make it last to the end of the month: ${ctx.money(pic.perDay)} a day`),
+    h('p', { class: 'hero-sub' }, lb.due
+      ? `From the ${ctx.money(lb.start)} spending money you have, after ${ctx.money(lb.due)} still to come out in that time.`
+      : `From the ${ctx.money(lb.start)} spending money you have. Nothing more is set to come out in that time.`),
+    h('div', { class: 'left-budget' },
+      meter(ratio, budgetLevel(pic.spent, Math.max(0, b.amount))),
+      h('a', { class: 'left-budget-text', href: '#/budget' }, budgetLine)),
     h('div', { class: 'switches' },
       toggle('planned', 'Planned payments'),
       toggle('wishes', 'Wishlist', ticked.length ? `${ticked.length} ticked` : 'none ticked')),
-    h('div', { class: 'perday-today' },
-      h('span', {}, `Today: ${ctx.money(d.spentToday)} spent`),
-      h('span', { class: overToday ? 'bad' : 'good' }, overToday ? `${ctx.money(-d.todayLeft)} over today’s share` : `${ctx.money(d.todayLeft)} left today`)),
-    d.free < 0 ? notice('over', `What’s still to come this month is ${ctx.money(-d.free)} more than your spending money.`) : null,
-    d.free > 0 && p.runOut
-      ? notice('warn', `At this month’s pace (about ${ctx.money(p.perDay)} a day), your spending money runs out around ${formatShortDate(p.runOut)}.`)
-      : null,
-    safe && !safe.past && !safe.future && safe.left < 0
-      ? h('p', { class: 'perday-note' }, `Separately, you’re ${ctx.money(-safe.left)} over your ${ctx.money(safe.limit)} monthly limit.`)
-      : null,
-    h('button', { type: 'button', class: 'btn btn-ghost btn-sm perday-how', onclick: () => perDaySheet(ctx, d, month) }, 'How is this worked out?'));
+    h('p', { class: 'perday-today' }, `Today: ${ctx.money(pic.spentToday)} spent`),
+    leftMessage(ctx, pic, lb, period, when, pace(state, today, opts, pic)),
+    h('button', { type: 'button', class: 'btn btn-ghost btn-sm perday-how', onclick: () => leftSheet(ctx, pic, lb, label, shown, perDay) }, 'How is this worked out?'));
+}
+
+// At most one message, the most important first: what's still to come is more than you have; you're over a
+// fixed budget; at this pace the money runs out before the month ends.
+function leftMessage(ctx, pic, lb, period, when, p) {
+  const name = formatMonthName(pic.month);
+  if (lb.left < 0) {
+    const by = period === 'custom' ? `in the next ${lb.days === 1 ? 'day' : `${lb.days} days`}` : period === 'month' ? 'this month' : when;
+    return notice('over', `What’s still to come ${by} is ${ctx.money(-lb.left)} more than your spending money.`);
+  }
+  if (pic.left < 0) return notice('over', `What’s still to come this month is ${ctx.money(-pic.left)} more than your spending money.`);
+  if (pic.budget.mode === 'fixed' && pic.spent + pic.wishes > pic.budget.fixed) {
+    return notice('over', `You’re ${ctx.money(pic.spent + pic.wishes - pic.budget.fixed)} over your ${ctx.money(pic.budget.fixed)} budget for ${name}.`);
+  }
+  if (p.runOut && pic.leftToSpend > 0) {
+    return notice('warn', `At this month’s pace (about ${ctx.money(p.perDay)} a day), ${p.limitedBy === 'budget' ? 'your budget' : 'your spending money'} runs out around ${formatShortDate(p.runOut)}.`);
+  }
+  return null;
 }
 
 // How much there is in total, and how much of it is set aside. Always as of today.
@@ -250,30 +230,6 @@ function balanceCard(ctx, state, today) {
     h('div', { class: 'balance-parts' },
       h('button', { type: 'button', class: 'tap', onclick: open('savings') }, h('span', { class: 'balance-label' }, 'Set aside'), h('span', { class: 'balance-amount' }, ctx.money(b.savings))),
       h('button', { type: 'button', class: 'tap', onclick: open('spending') }, h('span', { class: 'balance-label' }, 'Spending money'), h('span', { class: `balance-amount${b.spending < 0 ? ' bad' : ''}` }, ctx.money(b.spending)))));
-}
-
-// Without an overall limit, the page leads with how much is left in this month's category budgets.
-function hero(ctx, budgets, month, today) {
-  if (!budgets.totalBudget) {
-    return card({ cls: 'hero' },
-      h('p', { class: 'hero-label' }, 'No spending limit yet'),
-      h('p', { class: 'hero-text' }, 'Set one amount for all your spending each month, bills included, and this is where you’ll see what’s safe to spend today and this week.'),
-      h('div', { class: 'btn-row' },
-        h('button', { type: 'button', class: 'btn btn-primary', onclick: () => limitDialog(ctx) }, 'Set a monthly limit'),
-        h('a', { class: 'btn btn-ghost', href: '#/budgets' }, 'Or budget by category')));
-  }
-  const { totalBudget, budgetedSpent } = budgets;
-  const left = totalBudget - budgetedSpent;
-  const level = budgetLevel(budgetedSpent, totalBudget);
-  const name = formatMonthName(month);
-  const daysLeft = month === monthOf(today) ? daysInMonth(month) - dayOf(today) + 1 : 0;
-  const details = [`${ctx.money(budgetedSpent)} spent of ${ctx.money(totalBudget)} budgeted`];
-  if (daysLeft && left > 0) details.push(`about ${ctx.money(Math.floor(left / daysLeft))} a day for the next ${daysLeft} ${daysLeft === 1 ? 'day' : 'days'}`);
-  return card({ cls: 'hero' },
-    h('p', { class: 'hero-label' }, left < 0 ? [icon('alert', 'icon-sm'), `Over budget in ${name}`] : `Left to spend in ${name}`),
-    h('p', { class: 'hero-value' }, ctx.money(Math.abs(left))),
-    meter(budgetedSpent / totalBudget, level, 'meter-lg'),
-    h('p', { class: 'hero-sub' }, details.join(' · ')));
 }
 
 function stat(ctx, label, value, previous, previousRange, upIsGood, onOpen) {
@@ -455,17 +411,41 @@ function balanceSheet(ctx, state, today, what) {
     goalsList);
 }
 
-function perDaySheet(ctx, d, month) {
+// The month picture line by line, then the chosen period: what's still to come in it and what's left per day.
+function leftSheet(ctx, pic, lb, label, shown, perDay) {
   const today = todayISO();
-  const what = [ctx.ui.left.planned ? 'planned payments' : null, ctx.ui.left.wishes ? 'ticked wishlist items' : null].filter(Boolean);
+  const name = formatMonthName(pic.month);
+  const b = pic.budget;
+  const what = [pic.opts.planned ? 'planned payments' : null, pic.opts.wishes ? 'ticked wishlist items' : null].filter(Boolean);
+  const line = (text, cents, sub, cls = '') => h('li', { class: cls },
+    h('span', { class: 'bd-name' }, text, sub ? h('span', { class: 'bd-cat' }, sub) : null),
+    h('span', { class: 'amount' }, ctx.money(cents)));
+  const parts = (done, toCome, doneWord) => (toCome ? `${ctx.money(done)} ${doneWord}, ${ctx.money(toCome)} still to come` : null);
+  const events = lb.events.filter((e) => e.amount !== 0 || e.type === 'bill');
   sheet('What you’d have left: how it’s worked out',
-    sumLine('Spending money ', h('b', {}, ctx.money(d.spending)),
-      d.reserved ? [' − everything still to come out this month ', h('b', {}, ctx.money(d.reserved))] : null,
-      ' = ', h('b', {}, ctx.money(d.free))),
-    sumLine(`Shared over the ${plural(d.daysLeft, 'day', 'days')} left in ${formatMonthName(month)}`, d.spentToday ? [' (with today’s ', h('b', {}, ctx.money(d.spentToday)), ' added back)'] : null, ' = ', h('b', {}, `${ctx.money(d.perDay)} a day`)),
-    h('p', { class: 'bd-note' }, `Counted: payments still to confirm, money moving into set-asides automatically${what.length ? `, and ${what.join(' and ')}` : ''}. Income still to come isn’t counted until it arrives. Payments are paid from money already set aside for them first.`),
-    d.upcoming.length
-      ? h('ul', { class: 'tl' }, d.upcoming.map((e) => eventRow(ctx, e, today)))
-      : h('p', { class: 'bd-note' }, `Nothing more is set to come out in ${formatMonthName(month)}.`),
-    h('p', { class: 'bd-note' }, 'Spending money is everything that came in, minus everything spent, minus what you’ve set aside. Tap it on Home to see every entry.'));
+    h('h3', { class: 'bd-head' }, h('span', {}, `${name} so far`)),
+    h('ul', { class: 'bd-lines' },
+      line('Carried in', pic.carriedIn, pic.income.countsLater ? `From before ${name}, and ${ctx.money(pic.income.countsLater)} that came in now but counts next month` : `From before ${name}`),
+      line(`+ Income that counts in ${name}`, pic.income.received, pic.income.expected ? `${ctx.money(pic.income.expected)} more is expected, and counted once it arrives` : null),
+      line('− Set aside', pic.setAside.total, parts(pic.setAside.done, pic.setAside.toCome, 'done')),
+      line('− Recurring and planned payments', pic.payments.total, parts(pic.payments.paid, pic.payments.toCome, 'paid')),
+      line('= Spending budget', b.auto, isFixed(b) ? 'What your income allows' : 'Worked out from the lines above', 'bd-total'),
+      isFixed(b) ? line('Your fixed budget', b.fixed, b.scope === 'month' ? `For ${name} only` : 'Every month') : null,
+      line('− Spent so far', pic.spent, pic.fromPots ? `Plus ${ctx.money(pic.fromPots)} paid from set-asides, which isn’t counted` : null),
+      pic.wishes ? line('− Ticked wishlist items', pic.wishes, 'If you bought them today') : null,
+      line('= Left', pic.leftToSpend, isFixed(b) ? (pic.limitedBy === 'budget' ? 'What your budget still allows' : 'What your money still allows, which is less than your budget') : `About ${ctx.money(pic.perDay)} a day for the ${plural(pic.daysLeft, 'day', 'days')} left`, 'bd-total')),
+    h('p', { class: 'bd-note' }, `Left is always your real money: the ${ctx.money(pic.spending)} spending money you have, less everything still due this month.`),
+    h('h3', { class: 'bd-head' }, h('span', {}, label)),
+    sumLine('Spending money ', h('b', {}, ctx.money(lb.start)),
+      lb.due ? [' − still to come out by ', formatShortDate(lb.until), ' ', h('b', {}, ctx.money(lb.due))] : null,
+      ' = ', h('b', {}, ctx.money(lb.left))),
+    shown !== lb.left ? h('p', { class: 'bd-note' }, `Your budget allows less: ${ctx.money(shown)}.`) : null,
+    sumLine(`Shared over the ${plural(lb.days, 'day', 'days')}, today included = `, h('b', {}, `${ctx.money(perDay)} a day`)),
+    h('p', { class: 'bd-note' }, 'Today’s spending has already come out, so it isn’t added back.'),
+    events.length
+      ? h('ul', { class: 'tl' }, events.map((e) => eventRow(ctx, e, today)))
+      : h('p', { class: 'bd-note' }, 'Nothing more is set to come out in that time.'),
+    h('p', { class: 'bd-note' }, `Counted: payments still to confirm, money moving into set-asides automatically${what.length ? `, and ${what.join(' and ')}` : ''}. Income still to come isn’t counted until it arrives. Payments are paid from money already set aside for them first.`));
 }
+
+const isFixed = (budget) => budget.mode === 'fixed';

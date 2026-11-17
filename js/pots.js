@@ -305,7 +305,7 @@ export function tryPay(state, { amount, categoryId }, today) {
   const plan = planSplit(state, { id: '(try)', kind: 'income', amount, categoryId, date: today });
   const d = spendPerDay(state, today);
   const free = d.free + plan.keep; // Spending money after bills still to come, with what this pay leaves.
-  return { ...plan, amount, bills: d.reserved, daysLeft: d.daysLeft, free, perDay: Math.floor(Math.max(0, free + d.spentToday) / d.daysLeft) };
+  return { ...plan, amount, bills: d.reserved, daysLeft: d.daysLeft, free, perDay: Math.floor(Math.max(0, free) / d.daysLeft) };
 }
 
 // What today's default splits would set aside from a list of income entries, replayed in date order from a

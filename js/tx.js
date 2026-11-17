@@ -1,10 +1,11 @@
 // Adding, editing and deleting transactions, plus the row used to list them.
 
-import { categoriesFor, categoryName, catsTotal, monthKey, potBalance, safeToSpend, splitOf, splitTotal } from './calc.js';
+import { categoriesFor, categoryName, catsTotal, monthKey, potBalance, splitOf, splitTotal } from './calc.js';
 import { addMonths, formatDay, formatMonthName, isValidDate, monthOf, todayISO } from './dates.js';
 import { h, icon } from './dom.js';
 import { centsToInput, parseAmount } from './money.js';
 import { quickAdd } from './keypad.js';
+import { monthPicture } from './month.js';
 import { confirmDip } from './move.js';
 import { isSavings } from './savings.js';
 import { sortedGoals } from './pots.js';
@@ -149,15 +150,13 @@ export function transactionDialog(ctx, tx = null) {
   });
 }
 
-// After a new expense this month, say where that leaves the monthly limit.
+// After a new expense this month, say what that leaves to spend (the same figures as Home).
 export function limitNote(ctx, date) {
   const today = todayISO();
   if (monthOf(date) !== monthOf(today)) return '';
-  const safe = safeToSpend(ctx.store.get(), monthOf(today), today);
-  if (!safe) return '';
-  if (safe.left < 0) return ` · ${ctx.money(-safe.left)} over your monthly limit`;
-  if (safe.todayLeft < 0) return ` · ${ctx.money(-safe.todayLeft)} over today’s share`;
-  return ` · ${ctx.money(safe.todayLeft)} left to spend today`;
+  const p = monthPicture(ctx.store.get(), monthOf(today), today, ctx.ui.left);
+  if (p.leftToSpend < 0) return p.limitedBy === 'budget' ? ` · ${ctx.money(-p.leftToSpend)} over your budget this month` : ` · ${ctx.money(-p.leftToSpend)} short this month`;
+  return ` · ${ctx.money(p.perDay)} a day left to spend`;
 }
 
 export function deleteTransaction(ctx, tx) {

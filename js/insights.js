@@ -1,8 +1,9 @@
 // The maths behind the Insights page: time buckets for charts, this month's spending pace, where income
 // went, spending by weekday, the balance over time, and the facts the plain-English insights are built from.
 
-import { balance, inRange, monthKey, paidFromPot, rangeSpan, spendByCategory, spendPerDay, totals } from './calc.js';
+import { balance, inRange, monthKey, paidFromPot, rangeSpan, spendByCategory, totals } from './calc.js';
 import { addDays, dateInMonth, dayOf, dayOfWeek, daysBetween, daysInMonth, formatDay, formatMonth, formatMonthShort, formatShortDate, monthOf, monthRange } from './dates.js';
+import { monthPicture } from './month.js';
 import { ratioOf, setAsideIn } from './pots.js';
 
 // Splits a stretch of days into chart buckets: days for up to a month, weeks (Monday to Sunday) for up to
@@ -55,35 +56,36 @@ export function flowSeries(transactions, span) {
   return { size, rows };
 }
 
-// This month's spending from spending money, day by day, against an even pace for what the month can
-// afford (what's been spent plus the spending money still there).
+// This month's everyday spending from spending money, day by day, against an even pace for what the month can
+// afford: its spending budget (see month.js), which already leaves recurring and planned payments out.
 //   cumulative: spent by the end of each day so far.   even: the even pace for every day of the month.
-//   runOut: about when spending money runs out at the day-to-day pace so far (bills left out, since they
-//           come in lumps), or null when it lasts the month.
-export function pace(state, today) {
+//   runOut: about when what's left to spend runs out at the day-to-day pace so far (payments left out, since
+//           they come in lumps), or null when it lasts the month.
+// opts: the Home switches (planned payments, ticked wishlist items). picture: this month's, if already worked out.
+export function pace(state, today, opts = {}, picture = null) {
   const month = monthOf(today);
   const days = daysInMonth(month);
   const dayNumber = dayOf(today);
-  const d = spendPerDay(state, today);
+  const pic = picture ?? monthPicture(state, month, today, opts);
   const fromPot = paidFromPot(state);
-  const own = state.transactions.filter((t) => t.kind !== 'income' && typeof t.date === 'string' && t.date.startsWith(month) && t.date <= today && !fromPot(t));
+  const own = state.transactions.filter((t) => t.kind !== 'income' && typeof t.date === 'string' && t.date.startsWith(month) && t.date <= today && !fromPot(t) && !t.recurringId);
   const byDay = new Array(dayNumber).fill(0);
   for (const t of own) byDay[dayOf(t.date) - 1] += t.amount;
   const cumulative = [];
   byDay.reduce((sum, value, i) => (cumulative[i] = sum + value), 0);
   const spent = cumulative[dayNumber - 1] ?? 0;
-  const affordable = spent + Math.max(0, d.spending);
+  const affordable = Math.max(0, pic.budget.amount);
   const even = Array.from({ length: days }, (_, i) => Math.round((affordable * (i + 1)) / days));
-  const everyday = own.filter((t) => !t.recurringId).reduce((sum, t) => sum + t.amount, 0);
-  const perDay = everyday / dayNumber;
+  const perDay = spent / dayNumber;
   const lastDay = dateInMonth(month, 31);
+  const free = pic.leftToSpend;
   let runOut = null;
-  if (d.free <= 0) runOut = spent > 0 || d.reserved > 0 ? today : null;
+  if (free <= 0) runOut = spent > 0 || pic.spending > pic.left ? today : null;
   else if (perDay > 0) {
-    const date = addDays(today, Math.floor(d.free / perDay));
+    const date = addDays(today, Math.floor(free / perDay));
     if (date < lastDay) runOut = date;
   }
-  return { month, days, dayNumber, cumulative, even, spent, affordable, perDay: Math.round(perDay), free: d.free, runOut, ahead: spent - even[dayNumber - 1] };
+  return { month, days, dayNumber, cumulative, even, spent, affordable, perDay: Math.round(perDay), free, runOut, ahead: spent - even[dayNumber - 1], budget: pic.budget, limitedBy: pic.limitedBy };
 }
 
 // Where the income of a time frame went: spent from spending money, set aside (net of anything taken back

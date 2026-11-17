@@ -114,7 +114,7 @@ async function importFromSpendSave(ctx, raw) {
     summary.countsIn ? `${summary.countsIn} ${summary.countsIn === 1 ? 'pay' : 'pays'} logged for the next month will count in that month.` : '',
     summary.goals.length ? `Set-asides: ${summary.goals.join(', ')}.` : '',
     summary.recurring.length ? `New monthly recurring items: ${summary.recurring.join(', ')}.` : '',
-    summary.spendingLimit ? `Monthly spending limit: ${ctx.money(summary.spendingLimit)}.` : '',
+    summary.spendingLimit ? `Your Spend & Save budget, ${ctx.money(summary.spendingLimit)} a month, is kept as the fixed spending budget you can turn on under Budget.` : '',
     summary.unsupportedRecurring.length ? `Not repeating monthly, so not added: ${summary.unsupportedRecurring.join(', ')}.` : '',
     summary.newCategories.length ? `New categories: ${summary.newCategories.join(', ')}.` : '',
     summary.archived.length ? `Unused starter categories will be archived: ${summary.archived.join(', ')}.` : '',
